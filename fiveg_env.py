@@ -12,6 +12,7 @@ class CoreNetworkEnvironment:
         self.drop_percentage = 0
         self.total_packets = 0
         self.flow_prices = np.random.randint(1, 5, num_flows)  # Random prices for each flow
+
         
     def reset(self):
         self.channel_queues = np.zeros(self.num_channels)
