@@ -21,8 +21,7 @@ class Generator:
             if self.use_sleep:
                 time.sleep(self.time_to_sleep)
             else:
-                spinwait_us(self.time_to_sleep*10**6) 
-                
+                spinwait_us(self.time_to_sleep*10**6)            
             self.total += 1   
             
 def spinwait_us(delay):
@@ -32,8 +31,8 @@ def spinwait_us(delay):
 
 
 total = AtomicLong(0)
-for i in range(1):
-    gen = Generator(total, 100000, False)
+for i in range(10):
+    gen = Generator(total, 1000, True)
     generator_thread = threading.Thread(target=gen.generate_packets)    
     generator_thread.start()
 
