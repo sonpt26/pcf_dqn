@@ -94,7 +94,7 @@ class NetworkEnv(gym.Env):
                 print("Negative time", latency)
             else:
                 self.accumulators[traffic_class]["latency"].append(latency)
-                self.stat[tech][] += packet_size
+                # self.stat[tech][] += packet_size
             if time.time() - start > self.total_simulation_time:
                 break
 
