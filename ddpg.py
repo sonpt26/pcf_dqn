@@ -9,10 +9,9 @@ import tensorflow as tf
 import gymnasium as gym
 import numpy as np
 import matplotlib.pyplot as plt
-from fiveg_env import Env
-# Specify the `render_mode` parameter to show the attempts of the agent in a pop up window.
-env = gym.make("Pendulum-v1")  # , render_mode="human")
+from network import NetworkEnv
 
+env = NetworkEnv()
 num_states = env.observation_space.shape[0]
 print("Size of State Space ->  {}".format(num_states))
 num_actions = env.action_space.shape[0]
