@@ -28,11 +28,11 @@ class NetworkEnv(gym.Env):
     def __init__(self):
         super(NetworkEnv, self).__init__()
         # Parameters
-        self.scale_factor = 1
+        self.scale_factor = 10
         self.generator_setting = {
-            "TF1": {"num_thread": 2, "packet_size": 1024, "rate": 10, "price": 30},
-            "TF2": {"num_thread": 2, "packet_size": 1024, "rate": 20, "price": 20},
-            "TF3": {"num_thread": 1, "packet_size": 10240, "rate": 100, "price": 3},
+            "TF1": {"num_thread": 4, "packet_size": 1024, "rate": 100, "price": 10},
+            "TF2": {"num_thread": 4, "packet_size": 1024, "rate": 200, "price": 20},
+            "TF3": {"num_thread": 1, "packet_size": 10240, "rate": 1024, "price": 3},
         }
         self.processor_setting = {
             "NR": {"num_thread": 1, "limit": 200, "rate": 100, "revenue_factor": 1},
@@ -289,6 +289,10 @@ class NetworkEnv(gym.Env):
 
 env = NetworkEnv()
 observation = env.reset()
-# action = env.action_space.sample()
-action = [0.1, 0, 1]
+action = env.action_space.sample()
+# action = [1, 0.5, 1]
 observation, reward, done, _ = env.step(action)
+# action = [1, 1, 1]
+# NR. TF1. R: 63.28$. L: 11.38$. T: 143.88 mbps. TF2. R: 221.95$. L: 33.4$. T: 251.45 mbps. TF3. R: 10.18$. L: 3.46$. T: 77.99 mbps|All. R: 2954.07$. L: 482.42$. T: 473.32 mbps
+# action = [1, 0.5, 1]
+# NR. TF1. R: 70.45$. L: 0.0$. T: 145.44 mbps. TF2. R: 117.94$. L: 0.0$. T: 121.31 mbps. TF3. R: 13.43$. L: 0.0$. T: 94.54 mbps|All. R: 2018.15$. L: 0.0$. T: 361.28 mbps
