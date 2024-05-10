@@ -35,8 +35,8 @@ class NetworkEnv(gym.Env):
             "TF3": {"num_thread": 1, "packet_size": 10240, "rate": 1024, "price": 3},
         }
         self.processor_setting = {
-            "NR": {"num_thread": 1, "limit": 200, "rate": 100, "revenue_factor": 1},
-            "WF": {"num_thread": 1, "limit": 200, "rate": 100, "revenue_factor": 0},
+            "NR": {"num_thread": 2, "limit": 200, "rate": 100, "revenue_factor": 0.9},
+            "WF": {"num_thread": 1, "limit": 200, "rate": 100, "revenue_factor": 0.1},
         }
         self.timeout_processor = 0.5
         self.total_simulation_time = 30  # seconds
@@ -103,7 +103,7 @@ class NetworkEnv(gym.Env):
             except Exception as error:
                 if type(error) is Empty:
                     if time.time() - start > self.total_simulation_time + 2:
-                        print("Processor finish ", tech)
+                        print("Processor finish", tech)
                         break
                     continue
                 print("Exception", error)
@@ -111,6 +111,7 @@ class NetworkEnv(gym.Env):
     def print_stat(self):
         start = time.time()
         start_interval = start
+        self.state_snapshot = {}
         while True:
             if time.time() - start_interval < 5:
                 time.sleep(1)
@@ -195,11 +196,21 @@ class NetworkEnv(gym.Env):
                 longest = max(longest, len(log_str))
 
             separator = "=" * longest
+            print("Queue.", self.get_queue_status())
             print(separator)
             start_interval = time.time()
             if time.time() - start > (self.total_simulation_time):
                 print("Stop monitor")
                 break
+
+    def get_queue_status(self):
+        result = ", ".join(
+            map(
+                lambda kv: f"{kv[0]}: {str(round(kv[1].qsize()/kv[1].maxsize,2))}",
+                self.queue.items(),
+            )
+        )
+        return result
 
     def step(self, action):
         start_step = time.time()
@@ -264,11 +275,9 @@ class NetworkEnv(gym.Env):
             t.join()
 
         log_thread.join()
-        result = ", ".join(
-            map(lambda kv: f"{kv[0]}: {kv[1].qsize()}", self.queue.items())
-        )
+
         print(
-            "Finish step. Queue {" + result + "}.",
+            "Finish step. Queue {" + self.get_queue_status() + "}.",
             "Total time:",
             str(round(time.time() - start_step, 2)),
             "s",
@@ -289,8 +298,8 @@ class NetworkEnv(gym.Env):
 
 env = NetworkEnv()
 observation = env.reset()
-action = env.action_space.sample()
-# action = [1, 0.5, 1]
+# action = env.action_space.sample()
+action = [0.5, 1, 0.9]
 observation, reward, done, _ = env.step(action)
 # action = [1, 1, 1]
 # NR. TF1. R: 63.28$. L: 11.38$. T: 143.88 mbps. TF2. R: 221.95$. L: 33.4$. T: 251.45 mbps. TF3. R: 10.18$. L: 3.46$. T: 77.99 mbps|All. R: 2954.07$. L: 482.42$. T: 473.32 mbps
