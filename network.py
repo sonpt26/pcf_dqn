@@ -86,7 +86,7 @@ class NetworkEnv(gym.Env):
                 time.sleep(0.0001)
                 continue
             traffic_class = item.get_traffic_class()
-            packet_size = self.generator_setting[traffic_class]["packet_size"]            
+            packet_size = self.generator_setting[traffic_class]["packet_size"]
             process_time = packet_size * 1.0 * 8 / (rate * 1e6)
             timeit.time.sleep(process_time)
             latency = time.time_ns() - item.get_start()
@@ -94,7 +94,8 @@ class NetworkEnv(gym.Env):
                 print("Negative time", latency)
             else:
                 self.accumulators[traffic_class]["latency"].append(latency)
-                # self.stat[tech][] += packet_size
+                self.stat[tech][traffic_class]["revenue"] += 1
+                self.stat[tech][traffic_class]["packet_count"] += 1
             if time.time() - start > self.total_simulation_time:
                 break
 
@@ -125,10 +126,45 @@ class NetworkEnv(gym.Env):
                         v.value = 0
                 print(log_str)
                 longest = max(longest, len(log_str))
-            
+
             for key, value in self.stat.items():
                 log_str = key
-                
+                total_revenue = 0
+                total_data = 0
+                rev_factor = self.processor_setting[key]["revenue_factor"]
+                for k, v in value.items():
+                    tf_rev = (
+                        self.generator_setting[k]["price"]
+                        * self.generator_setting[k]["packet_size"]
+                        * v["revenue"].value
+                        / 8
+                        / 1e6
+                    )
+                    total_revenue += tf_rev
+                    total_data += self.scale_factor * (
+                        v["packet_count"].value
+                        * self.generator_setting[k]["packet_size"]
+                        * 8
+                    )
+                    throughput = self.scale_factor * (
+                        v['packet_count'].value
+                        * self.generator_setting[k]["packet_size"]
+                        * 8
+                        / (5 * 1e6)
+                    )
+                    log_str += (
+                        ". "
+                        + k
+                        + ": "
+                        + str(round(tf_rev, 2))
+                        + "$/"
+                        + str(round(throughput, 2))
+                        + " mbps"
+                    )
+                log_str += (
+                    ". Total: " + str(round(total_revenue * rev_factor, 2)) + "$/"+ str(round(total_data / (5 * 1e6), 2)) + " mbps"
+                )                
+                print(log_str)
 
             separator = "=" * longest
             print(separator)
@@ -140,6 +176,25 @@ class NetworkEnv(gym.Env):
         self.generators = {}
         self.accumulators = {}
         self.stat = {}
+        for key, value in self.processor_setting.items():
+            my_queue = self.queue[key]
+            self.stat[key] = {}
+            for i in range(value["num_thread"]):
+                processor = threading.Thread(
+                    target=self.packet_processor,
+                    args=(
+                        key,
+                        value["rate"],
+                        my_queue,
+                    ),
+                )
+                processor.start()
+            for tf in self.generator_setting.keys():
+                self.stat[key][tf] = {
+                    "revenue": AtomicLong(0),
+                    "packet_count": AtomicLong(0),
+                }
+
         for key, value in self.generator_setting.items():
             self.accumulators[key] = {}
             self.accumulators[key]["total"] = AtomicLong(0)
@@ -159,18 +214,6 @@ class NetworkEnv(gym.Env):
                 )
                 packet_generator_thread.start()
 
-        for key, value in self.processor_setting.items():
-            my_queue = self.queue[key]
-            for i in range(value["num_thread"]):
-                processor = threading.Thread(
-                    target=self.packet_processor,
-                    args=(
-                        key,
-                        value["rate"],
-                        my_queue,
-                    ),
-                )
-                processor.start()
         log_thread = threading.Thread(target=self.print_stat)
         log_thread.start()
         return [], 0, False, {}
@@ -187,7 +230,7 @@ class NetworkEnv(gym.Env):
 
 env = NetworkEnv()
 observation = env.reset()
-# action = env.action_space.sample()
+action = env.action_space.sample()
 # action = [1,1,1,1]
-action = [1, 0, 0]
+# action = [1, 1, 1]
 observation, reward, done, _ = env.step(action)
