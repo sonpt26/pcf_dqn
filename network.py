@@ -46,8 +46,12 @@ class NetworkEnv(gym.Env):
             low=0, high=1, shape=(len(self.traffic_classes),), dtype=np.float32
         )
         self.queue = {}
+        self.is_drop = False
         for key, value in self.processor_setting.items():
-            self.queue[key] = queue.Queue(value["limit"] * value["num_thread"])
+            if self.is_drop:
+                self.queue[key] = queue.Queue(value["limit"] * value["num_thread"])
+            else:
+                self.queue[key] = queue.Queue()
 
         self.observation_space = spaces.Box(low=0, high=100, dtype=np.float32)
         self.total_revenue = AtomicLong(0)
@@ -204,12 +208,17 @@ class NetworkEnv(gym.Env):
                 break
 
     def get_queue_status(self):
-        result = ", ".join(
-            map(
-                lambda kv: f"{kv[0]}: {str(round(kv[1].qsize()/kv[1].maxsize,2))}",
-                self.queue.items(),
+        if self.is_drop:
+            result = ", ".join(
+                map(
+                    lambda kv: f"{kv[0]}: {str(round(kv[1].qsize()/kv[1].maxsize,2))}",
+                    self.queue.items(),
+                )
             )
-        )
+        else:
+            result=""
+            for key, value in self.queue.items():
+                result += key + ": " + str(value.qsize())+". "
         return result
 
     def step(self, action):
@@ -299,7 +308,7 @@ class NetworkEnv(gym.Env):
 env = NetworkEnv()
 observation = env.reset()
 # action = env.action_space.sample()
-action = [0.5, 1, 0.9]
+action = [0.5, 1, 0.5]
 observation, reward, done, _ = env.step(action)
 # action = [1, 1, 1]
 # NR. TF1. R: 63.28$. L: 11.38$. T: 143.88 mbps. TF2. R: 221.95$. L: 33.4$. T: 251.45 mbps. TF3. R: 10.18$. L: 3.46$. T: 77.99 mbps|All. R: 2954.07$. L: 482.42$. T: 473.32 mbps
