@@ -31,8 +31,8 @@ def spinwait_us(delay):
 
 
 total = AtomicLong(0)
-for i in range(10):
-    gen = Generator(total, 1000, True)
+for i in range(50):
+    gen = Generator(total, 200, True)
     generator_thread = threading.Thread(target=gen.generate_packets)    
     generator_thread.start()
 

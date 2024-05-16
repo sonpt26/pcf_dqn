@@ -28,33 +28,60 @@ class NetworkEnv(gym.Env):
     def __init__(self):
         super(NetworkEnv, self).__init__()
         # Parameters
-        self.scale_factor = 10
+        self.scale_factor = 1
         self.generator_setting = {
-            "TF1": {"num_thread": 4, "packet_size": 1024, "rate": 100, "price": 10},
-            "TF2": {"num_thread": 4, "packet_size": 1024, "rate": 200, "price": 20},
-            "TF3": {"num_thread": 1, "packet_size": 10240, "rate": 1024, "price": 3},
+            "TF1": {
+                "num_thread": 2,
+                "packet_size": 512,
+                "rate": 5,
+                "price": 10,
+                "qos_latency_ms": 4,
+            },
+            "TF2": {
+                "num_thread": 2,
+                "packet_size": 1024,
+                "rate": 6,
+                "price": 10,
+                "qos_latency_ms": 10,
+            },
+            "TF3": {
+                "num_thread": 5,
+                "packet_size": 1500,
+                "rate": 15,
+                "price": 30,
+                "qos_latency_ms": 20,
+            },
         }
         self.processor_setting = {
-            "NR": {"num_thread": 2, "limit": 200, "rate": 100, "revenue_factor": 0.9},
-            "WF": {"num_thread": 1, "limit": 200, "rate": 100, "revenue_factor": 0.1},
+            "NR": {"num_thread": 2, "limit": 500, "rate": 200, "revenue_factor": 0.9},
+            "WF": {"num_thread": 2, "limit": 500, "rate": 100, "revenue_factor": 0.1},
         }
         self.timeout_processor = 0.5
-        self.total_simulation_time = 30  # seconds
+        self.total_simulation_time = 10  # seconds
+        self.stat_interval = 2
         self.traffic_classes = list(self.generator_setting.keys())
         self.choices = list(self.processor_setting.keys())
         self.action_space = spaces.Box(
             low=0, high=1, shape=(len(self.traffic_classes),), dtype=np.float32
         )
-        self.queue = {}
         self.is_drop = False
+        self.init_queue()
+        state_row = len(self.generator_setting)
+        # [latency, tech[i]_throughput, tech[i]_queue]
+        state_col = len(self.generator_setting) * 2 + 1
+        self.observation_space = spaces.Box(
+            low=0, high=1, dtype=np.float32, shape=(state_row, state_col)
+        )
+        self.total_revenue = AtomicLong(0)
+        self.sigmoid_state = True
+
+    def init_queue(self):
+        self.queue = {}
         for key, value in self.processor_setting.items():
             if self.is_drop:
                 self.queue[key] = queue.Queue(value["limit"] * value["num_thread"])
             else:
                 self.queue[key] = queue.Queue()
-
-        self.observation_space = spaces.Box(low=0, high=100, dtype=np.float32)
-        self.total_revenue = AtomicLong(0)
 
     def packet_generator(self, traffic_class, action):
         setting = self.generator_setting[traffic_class]
@@ -80,7 +107,13 @@ class NetworkEnv(gym.Env):
             timeit.time.sleep(time_to_wait)
             if time.time() - start_time > self.total_simulation_time:
                 print("Generator finish", traffic_class)
+                self.generators_finish += 1
                 break
+
+    def spinwait_nano(delay):
+        target = perf_counter_ns() + delay * 1000
+        while perf_counter_ns() < target:
+            pass
 
     def packet_processor(self, tech, rate, queue):
         start = time.time()
@@ -108,6 +141,7 @@ class NetworkEnv(gym.Env):
                 if type(error) is Empty:
                     if time.time() - start > self.total_simulation_time + 2:
                         print("Processor finish", tech)
+                        self.processors_finish += 1
                         break
                     continue
                 print("Exception", error)
@@ -115,49 +149,65 @@ class NetworkEnv(gym.Env):
     def print_stat(self):
         start = time.time()
         start_interval = start
-        self.state_snapshot = {}
         while True:
-            if time.time() - start_interval < 5:
+            if (
+                self.processors_finish.value > 0
+                and self.generators_finish.value > 0
+                and self.processors_finish.value == len(self.list_processor_threads)
+                and self.generators_finish.value == len(self.list_generator_threads)
+            ):
+                print("Finish monitor")
+                return
+
+            if time.time() - start_interval < self.stat_interval:
                 time.sleep(1)
                 continue
 
             longest = 0
-            for key, value in self.accumulators.items():
-                log_str = key
+            for tf, value in self.accumulators.items():
+                log_str = tf
                 for k, v in value.items():
                     if k == "latency":
-                        log_str += (
-                            ". latency: " + str(round(np.mean(v) / 1e6, 2)) + " ms"
-                        )
+                        latency = np.mean(v) / 1e6
+                        log_str += ". latency: " + str(round(latency, 2)) + " ms"
+                        self.state_snapshot[tf]["latency"].append(latency)
                     else:
                         throughput = self.scale_factor * (
                             v.value
-                            * self.generator_setting[key]["packet_size"]
+                            * self.generator_setting[tf]["packet_size"]
                             * 8
-                            / (5 * 1e6)
+                            / (self.stat_interval * 1e6)
                         )
                         log_str += ". " + k + ": " + str(round(throughput, 2)) + " mbps"
                         v.value = 0
                 print(log_str)
                 longest = max(longest, len(log_str))
 
-            for key, value in self.stat.items():
-                log_str = key
+            for tech, value in self.stat.items():
+                log_str = tech
                 total_revenue = 0
                 total_loss = 0
                 total_data = 0
-                rev_factor = self.processor_setting[key]["revenue_factor"]
-                for k, v in value.items():
+                rev_factor = self.processor_setting[tech]["revenue_factor"]
+                tech_max_mbps = (
+                    self.processor_setting[tech]["rate"]
+                    * self.processor_setting[tech]["num_thread"]
+                )
+                tech_max_queue = (
+                    self.processor_setting[tech]["limit"]
+                    * self.processor_setting[tech]["num_thread"]
+                )
+                for tf, v in value.items():
                     tf_rev = (
-                        self.generator_setting[k]["price"]
-                        * self.generator_setting[k]["packet_size"]
+                        self.generator_setting[tf]["price"]
+                        * self.generator_setting[tf]["packet_size"]
                         * v["revenue"].value
                         / 8
                         / 1e6
                     )
                     tf_loss = (
-                        self.generator_setting[k]["price"]
-                        * self.generator_setting[k]["packet_size"]
+                        self.generator_setting[tf]["price"]
+                        * self.generator_setting[tf]["packet_size"]
                         * v["loss"].value
                         / 8
                         / 1e6
@@ -166,18 +216,19 @@ class NetworkEnv(gym.Env):
                     total_loss += self.scale_factor * tf_loss
                     total_data += self.scale_factor * (
                         v["packet_count"].value
-                        * self.generator_setting[k]["packet_size"]
+                        * self.generator_setting[tf]["packet_size"]
                         * 8
                     )
                     throughput = self.scale_factor * (
                         v["packet_count"].value
-                        * self.generator_setting[k]["packet_size"]
+                        * self.generator_setting[tf]["packet_size"]
                         * 8
-                        / (5 * 1e6)
+                        / (self.stat_interval * 1e6)
                     )
+                    self.state_snapshot[tf]["throughput"][tech].append(throughput)
                     log_str += (
                         ". "
-                        + k
+                        + tf
                         + ". R: "
                         + str(round(tf_rev, 2))
                         + "$. L: "
@@ -193,7 +244,7 @@ class NetworkEnv(gym.Env):
                     + "$. L: "
                     + str(round(total_loss * rev_factor, 2))
                     + "$. T: "
-                    + str(round(total_data / (5 * 1e6), 2))
+                    + str(round(total_data / (self.stat_interval * 1e6), 2))
                     + " mbps"
                 )
                 print(log_str)
@@ -203,31 +254,35 @@ class NetworkEnv(gym.Env):
             print("Queue.", self.get_queue_status())
             print(separator)
             start_interval = time.time()
-            if time.time() - start > (self.total_simulation_time):
-                print("Stop monitor")
-                break
 
     def get_queue_status(self):
-        if self.is_drop:
-            result = ", ".join(
-                map(
-                    lambda kv: f"{kv[0]}: {str(round(kv[1].qsize()/kv[1].maxsize,2))}",
-                    self.queue.items(),
-                )
+        result = ""
+        for tech, value in self.queue.items():
+            max_queue_size = (
+                self.processor_setting[tech]["limit"]
+                * self.processor_setting[tech]["num_thread"]
             )
-        else:
-            result=""
-            for key, value in self.queue.items():
-                result += key + ": " + str(value.qsize())+". "
+            percent = value.qsize() / max_queue_size
+            result += tech + ": " + str(round(percent, 2)) + ". "
+            for tf, val in self.generator_setting.items():
+                self.state_snapshot[tf]["queue"][tech].append(percent)
         return result
 
     def step(self, action):
-        start_step = time.time()
+        # (TF[i]_throughtput_tech[k], TF[i]_latency, queue_load_tech[k])
+        self.state_snapshot = {}
+        for tf, setting in self.generator_setting.items():
+            self.state_snapshot[tf] = {"latency": [], "throughput": {}, "queue": {}}
+            for tech, v in self.processor_setting.items():
+                self.state_snapshot[tf]["throughput"][tech] = []
+                self.state_snapshot[tf]["queue"][tech] = []
         self.generators = {}
         self.accumulators = {}
         self.stat = {}
-        list_generator_threads = []
-        list_processor_threads = []
+        self.processors_finish = AtomicLong(0)
+        self.generators_finish = AtomicLong(0)
+        self.list_generator_threads = []
+        self.list_processor_threads = []
         for key, value in self.processor_setting.items():
             my_queue = self.queue[key]
             self.stat[key] = {}
@@ -240,7 +295,7 @@ class NetworkEnv(gym.Env):
                         my_queue,
                     ),
                 )
-                list_processor_threads.append(processor)
+                self.list_processor_threads.append(processor)
 
             for tf in self.generator_setting.keys():
                 self.stat[key][tf] = {
@@ -266,21 +321,23 @@ class NetworkEnv(gym.Env):
                         action,
                     ),
                 )
-                list_generator_threads.append(packet_generator_thread)
+                self.list_generator_threads.append(packet_generator_thread)
 
-        for t in list_processor_threads:
+        start_step = time.time()
+
+        for t in self.list_processor_threads:
             t.start()
 
-        for t in list_generator_threads:
+        for t in self.list_generator_threads:
             t.start()
 
         log_thread = threading.Thread(target=self.print_stat)
         log_thread.start()
 
-        for t in list_processor_threads:
+        for t in self.list_processor_threads:
             t.join()
 
-        for t in list_generator_threads:
+        for t in self.list_generator_threads:
             t.join()
 
         log_thread.join()
@@ -291,11 +348,57 @@ class NetworkEnv(gym.Env):
             str(round(time.time() - start_step, 2)),
             "s",
         )
+        print(self.state_snapshot)
+        state = self.get_current_state()
+        print(state.shape, state)
+
+        # state, reward, done, truncated, _
         return [], 0, False, {}
 
+    def sigmoid(self, x):
+        return 1 / (1 + np.exp(-x))
+
+    def get_current_state(self):
+        state_arr = []
+        for tf, value in self.state_snapshot.items():
+            # [latency, nr_throughput, wf_throughput, nr_queue, wf_queue]
+            tf_qos_latency = self.generator_setting[tf]["qos_latency_ms"]
+            mean_latency = np.mean(self.state_snapshot[tf]["latency"]).item()
+            tf_val = [mean_latency / tf_qos_latency]
+            # normalize
+            for tech, val in value["throughput"].items():
+                arr = np.array(val)
+                non_zero_elements = arr[arr != 0]
+                mean_non_zero = 0
+                max_mbps = (
+                    self.processor_setting[tech]["num_thread"]
+                    * self.processor_setting[tech]["rate"]
+                )
+                if non_zero_elements.size > 0:
+                    mean_non_zero = np.mean(non_zero_elements)
+                # normalize throughput
+                tf_val.append(mean_non_zero / max_mbps)
+
+            for tech, val in value["queue"].items():
+                arr = np.array(val)
+                mean_non_zero = 0
+                if arr.size > 0:
+                    mean_non_zero = np.mean(arr)
+                tf_val.append(mean_non_zero)
+            state_arr.append(np.array(tf_val))
+
+        state = np.array(state_arr)
+        # print("origin", state)
+        # print("sigmoid", self.sigmoid(state))
+        if self.sigmoid_state:
+            return self.sigmoid(state)
+        return state
+
     def reset(self):
-        print("Reset not implemented")
-        pass
+        print("Reset env")
+        self.init_queue()
+        # for k, q in self.queue.items():
+        #     q.clear()
 
     def render(self, mode="human"):
         print("Render not implemented")
@@ -307,9 +410,15 @@ class NetworkEnv(gym.Env):
 
 env = NetworkEnv()
 observation = env.reset()
-# action = env.action_space.sample()
-action = [0.5, 1, 0.5]
-observation, reward, done, _ = env.step(action)
+while True:
+    action = env.action_space.sample()
+    # action = [1, 0.25, 0.5]
+    observation, reward, done, _ = env.step(action)
+    env.reset()
+    time.sleep(1)
+    print("$$$$$$$$$$$$$$$$$$$$$")
+    print("   $$$$$$$$$$$$$$")
+    print("      $$$$$$$$")
 # action = [1, 1, 1]
 # NR. TF1. R: 63.28$. L: 11.38$. T: 143.88 mbps. TF2. R: 221.95$. L: 33.4$. T: 251.45 mbps. TF3. R: 10.18$. L: 3.46$. T: 77.99 mbps|All. R: 2954.07$. L: 482.42$. T: 473.32 mbps
 # action = [1, 0.5, 1]
