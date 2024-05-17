@@ -343,7 +343,7 @@ class NetworkEnv(gym.Env):
         )
         # print(self.state_snapshot)
         state, reward = self.get_current_state_and_reward()
-        print(state, reward)
+        # print(state, reward)
         return state, reward, False, {}
 
     def sigmoid(self, x):
@@ -356,10 +356,10 @@ class NetworkEnv(gym.Env):
         for tf, value in self.state_snapshot.items():
             # [latency, nr_throughput, wf_throughput, nr_queue, wf_queue]
             tf_qos_latency = self.generator_setting[tf]["qos_latency_ms"]
-            mean_latency = np.mean(self.state_snapshot[tf]["latency"]).item()            
+            mean_latency = np.mean(self.state_snapshot[tf]["latency"]).item()
             qos_ratio = mean_latency / tf_qos_latency
             tf_val = [qos_ratio]
-            reward_qos.append(qos_ratio)
+            reward_qos.append(1 / qos_ratio)
             # normalize
             for tech, val in value["throughput"].items():
                 arr = np.array(val)
@@ -391,14 +391,14 @@ class NetworkEnv(gym.Env):
         max_rev_tech = max(
             self.processor_setting,
             key=lambda item: self.processor_setting[item]["revenue_factor"],
-        )        
+        )
         processed_tf = {}
         for tf, value in self.generator_setting.items():
             processed_tf[tf] = 0
         total_revenue = 0
         for tech, value in self.stat.items():
             for tf, val in value.items():
-                processed = (                    
+                processed = (
                     val["revenue"].value
                     * self.generator_setting[tf]["packet_size"]
                     * self.generator_setting[tf]["price"]
@@ -409,12 +409,12 @@ class NetworkEnv(gym.Env):
                 total_revenue += (
                     processed * self.processor_setting[tech]["revenue_factor"]
                 )
-        
+
         max_revenue = (
             sum(processed_tf.values())
             * self.processor_setting[max_rev_tech]["revenue_factor"]
         )
-        
+
         reward_revenue = 0
         if max_revenue > 0:
             reward_revenue = total_revenue / max_revenue
