@@ -242,8 +242,8 @@ def policy(state, noise_object):
 ## Training hyperparameters
 """
 
-std_dev = 0.2
-ou_noise = OUActionNoise(mean=np.zeros(1), std_deviation=float(std_dev) * np.ones(1))
+std_dev = 0.3
+ou_noise = OUActionNoise(mean=np.zeros(action_shape), std_deviation=float(std_dev) * np.ones(action_shape))
 
 actor_model = get_actor()
 critic_model = get_critic()
