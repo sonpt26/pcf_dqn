@@ -29,6 +29,7 @@ class NetworkEnv(gym.Env):
         super(NetworkEnv, self).__init__()
         # Parameters
         self.scale_factor = 1
+        self.reward_factor = {"qos": 0.5, "revenue": 0.5}
         self.generator_setting = {
             "TF1": {
                 "num_thread": 2,
@@ -72,7 +73,6 @@ class NetworkEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=0, high=1, dtype=np.float32, shape=(state_row, state_col)
         )
-        self.total_revenue = AtomicLong(0)
         self.sigmoid_state = True
 
     def init_queue(self):
@@ -172,12 +172,13 @@ class NetworkEnv(gym.Env):
                         log_str += ". latency: " + str(round(latency, 2)) + " ms"
                         self.state_snapshot[tf]["latency"].append(latency)
                     else:
-                        throughput = self.scale_factor * (
+                        total_processed = self.scale_factor * (
                             v.value
                             * self.generator_setting[tf]["packet_size"]
                             * 8
-                            / (self.stat_interval * 1e6)
+                            / 1e6
                         )
+                        throughput = total_processed / self.stat_interval
                         log_str += ". " + k + ": " + str(round(throughput, 2)) + " mbps"
                         v.value = 0
                 print(log_str)
@@ -189,14 +190,6 @@ class NetworkEnv(gym.Env):
                 total_loss = 0
                 total_data = 0
                 rev_factor = self.processor_setting[tech]["revenue_factor"]
-                tech_max_mbps = (
-                    self.processor_setting[tech]["rate"]
-                    * self.processor_setting[tech]["num_thread"]
-                )
-                tech_max_queue = (
-                    self.processor_setting[tech]["limit"]
-                    * self.processor_setting[tech]["num_thread"]
-                )
                 for tf, v in value.items():
                     tf_rev = (
                         self.generator_setting[tf]["price"]
@@ -348,23 +341,25 @@ class NetworkEnv(gym.Env):
             str(round(time.time() - start_step, 2)),
             "s",
         )
-        print(self.state_snapshot)
-        state = self.get_current_state()
-        print(state.shape, state)
-
-        # state, reward, done, truncated, _
-        return [], 0, False, {}
+        # print(self.state_snapshot)
+        state, reward = self.get_current_state_and_reward()
+        print(state, reward)
+        return state, reward, False, {}
 
     def sigmoid(self, x):
         return 1 / (1 + np.exp(-x))
 
-    def get_current_state(self):
+    def get_current_state_and_reward(self):
         state_arr = []
+        reward_qos = []
+        reward_revenue = 0
         for tf, value in self.state_snapshot.items():
             # [latency, nr_throughput, wf_throughput, nr_queue, wf_queue]
             tf_qos_latency = self.generator_setting[tf]["qos_latency_ms"]
             mean_latency = np.mean(self.state_snapshot[tf]["latency"]).item()
-            tf_val = [mean_latency / tf_qos_latency]
+            qos_ratio = mean_latency / tf_qos_latency
+            tf_val = [qos_ratio]
+            reward_qos.append(qos_ratio)
             # normalize
             for tech, val in value["throughput"].items():
                 arr = np.array(val)
@@ -387,12 +382,49 @@ class NetworkEnv(gym.Env):
                 tf_val.append(mean_non_zero)
             state_arr.append(np.array(tf_val))
 
-        state = np.array(state_arr)
+        final_state = np.array(state_arr)
         # print("origin", state)
         # print("sigmoid", self.sigmoid(state))
         if self.sigmoid_state:
-            return self.sigmoid(state)
-        return state
+            final_state = self.sigmoid(final_state)
+        # maxmimum revenue
+        max_rev_tech = max(
+            self.processor_setting,
+            key=lambda item: self.processor_setting[item]["revenue_factor"],
+        )
+        print("max_rev_tech", max_rev_tech)
+        processed_tf = {}
+        for tf, value in self.generator_setting.items():
+            processed_tf[tf] = 0
+        total_revenue = 0
+        for tech, value in self.stat.items():
+            for tf, val in value.items():
+                processed = (
+                    val["revenue"].value
+                    * self.generator_setting[tf]["packet_size"]
+                    * self.generator_setting[tf]["price"]
+                    * 8
+                    / 1e6
+                )
+                processed_tf[tf] += processed
+                total_revenue += (
+                    processed * self.processor_setting[tech]["revenue_factor"]
+                )
+        max_revenue = (
+            sum(processed_tf.values())
+            * self.processor_setting[max_rev_tech]["revenue_factor"]
+        )
+        reward_revenue = 0
+        if max_revenue > 0:
+            reward_revenue = total_revenue / max_revenue
+        final_reward = (
+            self.reward_factor["qos"] * np.mean(reward_qos)
+            + self.reward_factor["revenue"] * reward_revenue
+        )
+        print("Max rev:", max_revenue, "real rev:", self.total_revenue)
+        if max_revenue == 0:
+            return state, 0
+        return state, final_reward
 
     def reset(self):
         print("Reset env")
