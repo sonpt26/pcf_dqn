@@ -28,6 +28,7 @@ class NetworkEnv(gym.Env):
     def __init__(self):
         super(NetworkEnv, self).__init__()
         # Parameters
+        self.queue_max_utilization = 0.1
         self.scale_factor = 1
         self.reward_factor = {"qos": 0.5, "revenue": 0.5}
         self.generator_setting = {
@@ -69,9 +70,10 @@ class NetworkEnv(gym.Env):
         self.init_queue()
         state_row = len(self.generator_setting)
         # [latency, tech[i]_throughput, tech[i]_queue]
-        state_col = len(self.generator_setting) * 2 + 1
+        state_col = len(self.processor_setting) * 2 + 1
+        self.state_shape = (state_row, state_col)
         self.observation_space = spaces.Box(
-            low=0, high=1, dtype=np.float32, shape=(state_row, state_col)
+            low=0, high=1, dtype=np.float32, shape=self.state_shape
         )
         self.sigmoid_state = True
 
@@ -342,9 +344,9 @@ class NetworkEnv(gym.Env):
             "s",
         )
         # print(self.state_snapshot)
-        state, reward = self.get_current_state_and_reward()
+        state, reward, terminated = self.get_current_state_and_reward()
         # print(state, reward)
-        return state, reward, False, {}
+        return state, reward, terminated, {}
 
     def sigmoid(self, x):
         return 1 / (1 + np.exp(-x))
@@ -353,12 +355,16 @@ class NetworkEnv(gym.Env):
         state_arr = []
         reward_qos = []
         reward_revenue = 0
+        qos_violated = 0
+        queue_violated = 0
         for tf, value in self.state_snapshot.items():
             # [latency, nr_throughput, wf_throughput, nr_queue, wf_queue]
             tf_qos_latency = self.generator_setting[tf]["qos_latency_ms"]
             mean_latency = np.mean(self.state_snapshot[tf]["latency"]).item()
             qos_ratio = mean_latency / tf_qos_latency
             tf_val = [qos_ratio]
+            if qos_ratio > 1:
+                qos_violated += 1
             reward_qos.append(1 / qos_ratio)
             # normalize
             for tech, val in value["throughput"].items():
@@ -379,6 +385,8 @@ class NetworkEnv(gym.Env):
                 mean_non_zero = 0
                 if arr.size > 0:
                     mean_non_zero = np.mean(arr)
+                if mean_non_zero > self.queue_max_utilization:
+                    queue_violated += 1
                 tf_val.append(mean_non_zero)
             state_arr.append(np.array(tf_val))
 
@@ -419,17 +427,32 @@ class NetworkEnv(gym.Env):
         if max_revenue > 0:
             reward_revenue = total_revenue / max_revenue
         final_reward = (
-            self.reward_factor["qos"] * np.mean(reward_qos).item()
+            self.reward_factor["qos"] * self.sigmoid(np.mean(reward_qos).item())
             + self.reward_factor["revenue"] * reward_revenue
         )
-        print("Max rev:", max_revenue, "real rev:", total_revenue)
+        terminal = qos_violated == 0 and queue_violated == 0
+        print(
+            "Max rev:",
+            max_revenue,
+            "real rev:",
+            total_revenue,
+            "qos_violated:",
+            qos_violated,
+            "queue_violated:",
+            queue_violated,
+            "terminated:",
+            terminal,
+            "reward:",
+            final_reward,
+        )
         if max_revenue == 0:
-            return final_state, 0
-        return final_state, final_reward
+            return final_state, 0, terminal
+        return final_state, final_reward, terminal
 
     def reset(self):
         print("Reset env")
         self.init_queue()
+        return np.zeros(self.state_shape), {}
         # for k, q in self.queue.items():
         #     q.clear()
 
@@ -437,21 +460,28 @@ class NetworkEnv(gym.Env):
         print("Render not implemented")
         pass
 
+    def get_action_shape(self):
+        return self.action_space.sample().shape
+
+    def get_state_shape(self):
+        return self.observation_space.sample().shape
+
     def close(self):
         pass
 
 
-env = NetworkEnv()
-observation = env.reset()
-while True:
-    action = env.action_space.sample()
-    # action = [1, 0.25, 0.5]
-    observation, reward, done, _ = env.step(action)
-    env.reset()
-    time.sleep(1)
-    print("$$$$$$$$$$$$$$$$$$$$$")
-    print("   $$$$$$$$$$$$$$")
-    print("      $$$$$$$$")
+# env = NetworkEnv()
+# observation = env.reset()
+# print(env.get_action_shape())
+# print(env.get_state_shape())
+# while True:
+#     action = env.action_space.sample()
+#     # action = [1, 0.25, 0.5]
+#     observation, reward, done, _ = env.step(action)
+#     print("observation", observation, observation.shape)
+#     env.reset()
+#     time.sleep(1)
+#     print("$$$$$$$$$$$$$$$$$$$$$")
 # action = [1, 1, 1]
 # NR. TF1. R: 63.28$. L: 11.38$. T: 143.88 mbps. TF2. R: 221.95$. L: 33.4$. T: 251.45 mbps. TF3. R: 10.18$. L: 3.46$. T: 77.99 mbps|All. R: 2954.07$. L: 482.42$. T: 473.32 mbps
 # action = [1, 0.5, 1]

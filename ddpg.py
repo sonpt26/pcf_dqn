@@ -3,8 +3,8 @@ import os
 os.environ["KERAS_BACKEND"] = "tensorflow"
 
 import keras
-from keras import layers
-
+from keras.layers import Input, Dense, Concatenate, Flatten
+from keras.models import Model
 import tensorflow as tf
 import gymnasium as gym
 import numpy as np
@@ -12,10 +12,12 @@ import matplotlib.pyplot as plt
 from network import NetworkEnv
 
 env = NetworkEnv()
+state_shape = env.get_state_shape()
+action_shape = env.get_action_shape()
 num_states = env.observation_space.shape[0]
-print("Size of State Space ->  {}".format(num_states))
+print("Shape of State Space ->  {}".format(state_shape))
 num_actions = env.action_space.shape[0]
-print("Size of Action Space ->  {}".format(num_actions))
+print("Shape of Action Space ->  {}".format(action_shape))
 
 upper_bound = env.action_space.high[0]
 lower_bound = env.action_space.low[0]
@@ -58,6 +60,7 @@ class OUActionNoise:
         else:
             self.x_prev = np.zeros_like(self.mean)
 
+
 class Buffer:
     def __init__(self, buffer_capacity=100000, batch_size=64):
         # Number of "experiences" to store at max
@@ -70,21 +73,20 @@ class Buffer:
 
         # Instead of list of tuples as the exp.replay concept go
         # We use different np.arrays for each tuple element
-        self.state_buffer = np.zeros((self.buffer_capacity, num_states))
-        self.action_buffer = np.zeros((self.buffer_capacity, num_actions))
+        self.state_buffer = np.zeros((self.buffer_capacity, *state_shape))
+        self.action_buffer = np.zeros((self.buffer_capacity, *action_shape))
         self.reward_buffer = np.zeros((self.buffer_capacity, 1))
-        self.next_state_buffer = np.zeros((self.buffer_capacity, num_states))
+        self.next_state_buffer = np.zeros((self.buffer_capacity, *state_shape))
 
     # Takes (s,a,r,s') obervation tuple as input
     def record(self, obs_tuple):
         # Set index to zero if buffer_capacity is exceeded,
         # replacing old records
-        index = self.buffer_counter % self.buffer_capacity
-
-        self.state_buffer[index] = obs_tuple[0]
-        self.action_buffer[index] = obs_tuple[1]
-        self.reward_buffer[index] = obs_tuple[2]
-        self.next_state_buffer[index] = obs_tuple[3]
+        index = self.buffer_counter % self.buffer_capacity        
+        self.state_buffer[index] = np.array(obs_tuple[0])
+        self.action_buffer[index] = np.array(obs_tuple[1])
+        self.reward_buffer[index] = np.array(obs_tuple[2])
+        self.next_state_buffer[index] = np.array(obs_tuple[3])
 
         self.buffer_counter += 1
 
@@ -156,41 +158,65 @@ def update_target(target, original, tau):
 
     target.set_weights(target_weights)
 
+
 def get_actor():
-    # Initialize weights between -3e-3 and 3-e3
-    last_init = keras.initializers.RandomUniform(minval=-0.003, maxval=0.003)
+    # # Initialize weights between -3e-3 and 3-e3
+    # last_init = keras.initializers.RandomUniform(minval=-0.003, maxval=0.003)
 
-    inputs = layers.Input(shape=(num_states,))
-    out = layers.Dense(256, activation="relu")(inputs)
-    out = layers.Dense(256, activation="relu")(out)
-    outputs = layers.Dense(1, activation="tanh", kernel_initializer=last_init)(out)
+    # inputs = layers.Input(shape=state_shape)
+    # out = layers.Dense(256, activation="relu")(inputs)
+    # out = layers.Dense(256, activation="relu")(out)
+    # outputs = layers.Dense(state_shape[0], activation="tanh", kernel_initializer=last_init)(out)
 
-    # Our upper bound is 2.0 for Pendulum.
-    outputs = outputs * upper_bound
-    model = keras.Model(inputs, outputs)
+    # # Our upper bound is 2.0 for Pendulum.
+    # outputs = outputs * upper_bound
+    # model = keras.Model(inputs, outputs)
+    # return model
+    inputs = Input(shape=state_shape)
+    x = Flatten()(inputs)  # Flatten the input if needed
+    x = Dense(64, activation="relu")(x)
+    x = Dense(64, activation="relu")(x)
+    outputs = Dense(action_shape[0], activation="tanh")(x)
+    model = Model(inputs, outputs)
     return model
 
 
 def get_critic():
-    # State as input
-    state_input = layers.Input(shape=(num_states,))
-    state_out = layers.Dense(16, activation="relu")(state_input)
-    state_out = layers.Dense(32, activation="relu")(state_out)
+    # # State as input
+    # state_input = layers.Input(shape=state_shape)
+    # state_out = layers.Dense(16, activation="relu")(state_input)
+    # state_out = layers.Dense(32, activation="relu")(state_out)
 
-    # Action as input
-    action_input = layers.Input(shape=(num_actions,))
-    action_out = layers.Dense(32, activation="relu")(action_input)
+    # # Action as input
+    # action_input = layers.Input(shape=action_shape)
+    # action_out = layers.Dense(32, activation="relu")(action_input)
 
-    # Both are passed through seperate layer before concatenating
-    concat = layers.Concatenate()([state_out, action_out])
+    # # Both are passed through seperate layer before concatenating
+    # concat = layers.Concatenate()([state_out, action_out])
 
-    out = layers.Dense(256, activation="relu")(concat)
-    out = layers.Dense(256, activation="relu")(out)
-    outputs = layers.Dense(1)(out)
+    # out = layers.Dense(256, activation="relu")(concat)
+    # out = layers.Dense(256, activation="relu")(out)
+    # outputs = layers.Dense(1)(out)
 
-    # Outputs single value for give state-action
-    model = keras.Model([state_input, action_input], outputs)
+    # # Outputs single value for give state-action
+    # model = keras.Model([state_input, action_input], outputs)
 
+    # return model
+    state_input = Input(shape=state_shape)
+    action_input = Input(shape=action_shape)
+
+    state_x = Flatten()(state_input)  # Flatten the state input if needed
+    state_x = Dense(64, activation="relu")(state_x)
+    state_x = Dense(64, activation="relu")(state_x)
+
+    action_x = Dense(64, activation="relu")(action_input)
+
+    concat = Concatenate()([state_x, action_x])
+    x = Dense(64, activation="relu")(concat)
+    x = Dense(64, activation="relu")(x)
+    outputs = Dense(1, activation="linear")(x)
+
+    model = Model([state_input, action_input], outputs)
     return model
 
 
@@ -209,7 +235,7 @@ def policy(state, noise_object):
     # We make sure action is within bounds
     legal_action = np.clip(sampled_actions, lower_bound, upper_bound)
 
-    return [np.squeeze(legal_action)]
+    return np.squeeze(legal_action)
 
 
 """
@@ -236,7 +262,7 @@ actor_lr = 0.001
 critic_optimizer = keras.optimizers.Adam(critic_lr)
 actor_optimizer = keras.optimizers.Adam(actor_lr)
 
-total_episodes = 100
+total_episodes = 50
 # Discount factor for future rewards
 gamma = 0.99
 # Used to update target networks
@@ -259,15 +285,17 @@ avg_reward_list = []
 for ep in range(total_episodes):
     prev_state, _ = env.reset()
     episodic_reward = 0
-
+    print("==================TRAINING EPISODE", ep, "==================")
+    print("==================AVG REWARD", np.mean(ep_reward_list), "==================")
     while True:
         tf_prev_state = keras.ops.expand_dims(
             keras.ops.convert_to_tensor(prev_state), 0
         )
 
         action = policy(tf_prev_state, ou_noise)
+        print("action", action)
         # Recieve state and reward from environment.
-        state, reward, done, truncated, _ = env.step(action)
+        state, reward, done, _ = env.step(action)
 
         buffer.record((prev_state, action, reward, state))
         episodic_reward += reward
@@ -278,7 +306,7 @@ for ep in range(total_episodes):
         update_target(target_critic, critic_model, tau)
 
         # End this episode when `done` or `truncated` is True
-        if done or truncated:
+        if done:
             break
 
         prev_state = state
