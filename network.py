@@ -356,7 +356,7 @@ class NetworkEnv(gym.Env):
         for tf, value in self.state_snapshot.items():
             # [latency, nr_throughput, wf_throughput, nr_queue, wf_queue]
             tf_qos_latency = self.generator_setting[tf]["qos_latency_ms"]
-            mean_latency = np.mean(self.state_snapshot[tf]["latency"]).item()
+            mean_latency = np.mean(self.state_snapshot[tf]["latency"]).item()            
             qos_ratio = mean_latency / tf_qos_latency
             tf_val = [qos_ratio]
             reward_qos.append(qos_ratio)
@@ -391,40 +391,41 @@ class NetworkEnv(gym.Env):
         max_rev_tech = max(
             self.processor_setting,
             key=lambda item: self.processor_setting[item]["revenue_factor"],
-        )
-        print("max_rev_tech", max_rev_tech)
+        )        
         processed_tf = {}
         for tf, value in self.generator_setting.items():
             processed_tf[tf] = 0
         total_revenue = 0
         for tech, value in self.stat.items():
             for tf, val in value.items():
-                processed = (
+                processed = (                    
                     val["revenue"].value
                     * self.generator_setting[tf]["packet_size"]
                     * self.generator_setting[tf]["price"]
-                    * 8
+                    / 8
                     / 1e6
                 )
                 processed_tf[tf] += processed
                 total_revenue += (
                     processed * self.processor_setting[tech]["revenue_factor"]
                 )
+        
         max_revenue = (
             sum(processed_tf.values())
             * self.processor_setting[max_rev_tech]["revenue_factor"]
         )
+        
         reward_revenue = 0
         if max_revenue > 0:
             reward_revenue = total_revenue / max_revenue
         final_reward = (
-            self.reward_factor["qos"] * np.mean(reward_qos)
+            self.reward_factor["qos"] * np.mean(reward_qos).item()
             + self.reward_factor["revenue"] * reward_revenue
         )
-        print("Max rev:", max_revenue, "real rev:", self.total_revenue)
+        print("Max rev:", max_revenue, "real rev:", total_revenue)
         if max_revenue == 0:
-            return state, 0
-        return state, final_reward
+            return final_state, 0
+        return final_state, final_reward
 
     def reset(self):
         print("Reset env")
