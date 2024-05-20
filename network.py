@@ -8,8 +8,8 @@ from atomiclong import AtomicLong
 import timeit
 from queue import Empty
 import logging
-import logging.config
-import yaml
+
+logger = logging.getLogger("my_logger")
 
 
 class Packet:
@@ -59,46 +59,33 @@ class NetworkEnv(gym.Env):
             },
         }
         self.processor_setting = {
-            "NR": {
-                "num_thread": 2,
-                "limit": 500,
-                "rate": 200,
-                "revenue_factor": 0.9
-            },
-            "WF": {
-                "num_thread": 2,
-                "limit": 500,
-                "rate": 100,
-                "revenue_factor": 0.1
-            },
+            "NR": {"num_thread": 2, "limit": 500, "rate": 200, "revenue_factor": 0.9},
+            "WF": {"num_thread": 2, "limit": 500, "rate": 100, "revenue_factor": 0.1},
         }
         self.timeout_processor = 0.5
         self.total_simulation_time = 10  # seconds
         self.stat_interval = 2
         self.traffic_classes = list(self.generator_setting.keys())
         self.choices = list(self.processor_setting.keys())
-        self.action_space = spaces.Box(low=0,
-                                       high=1,
-                                       shape=(len(self.traffic_classes), ),
-                                       dtype=np.float32)
+        self.action_space = spaces.Box(
+            low=0, high=1, shape=(len(self.traffic_classes),), dtype=np.float32
+        )
         self.is_drop = False
         self.init_queue()
         state_row = len(self.generator_setting)
         # [latency, tech[i]_throughput, tech[i]_queue]
         state_col = len(self.processor_setting) * 2 + 1
         self.state_shape = (state_row, state_col)
-        self.observation_space = spaces.Box(low=0,
-                                            high=1,
-                                            dtype=np.float32,
-                                            shape=self.state_shape)
+        self.observation_space = spaces.Box(
+            low=0, high=1, dtype=np.float32, shape=self.state_shape
+        )
         self.sigmoid_state = True
 
     def init_queue(self):
         self.queue = {}
         for key, value in self.processor_setting.items():
             if self.is_drop:
-                self.queue[key] = queue.Queue(value["limit"] *
-                                              value["num_thread"])
+                self.queue[key] = queue.Queue(value["limit"] * value["num_thread"])
             else:
                 self.queue[key] = queue.Queue()
 
@@ -111,7 +98,6 @@ class NetworkEnv(gym.Env):
         start_time = time.time()
         proprotion_5G = action[self.traffic_classes.index(traffic_class)]
         weights = [proprotion_5G, 1 - proprotion_5G]
-        print("Traffic class", traffic_class, weights)
         while True:
             accum_counter["total"] += 1
             choice = np.random.choice(a=self.choices, p=weights)
@@ -125,7 +111,7 @@ class NetworkEnv(gym.Env):
                 accum_counter[choice] += 1
             timeit.time.sleep(time_to_wait)
             if time.time() - start_time > self.total_simulation_time:
-                print("Generator finish", traffic_class)
+                logger.info("Generator finish %s", traffic_class)
                 self.generators_finish += 1
                 break
 
@@ -136,7 +122,7 @@ class NetworkEnv(gym.Env):
 
     def packet_processor(self, tech, rate, queue):
         start = time.time()
-        print("Processor", tech, rate, "mbps")
+        logger.info("Processor %s %s mbps", tech, rate)
         while True:
             try:
                 item = queue.get(timeout=self.timeout_processor)
@@ -145,39 +131,37 @@ class NetworkEnv(gym.Env):
                     continue
                 else:
                     traffic_class = item.get_traffic_class()
-                    packet_size = self.generator_setting[traffic_class][
-                        "packet_size"]
+                    packet_size = self.generator_setting[traffic_class]["packet_size"]
                     process_time = packet_size * 1.0 * 8 / (rate * 1e6)
                     timeit.time.sleep(process_time)
                     latency = time.time_ns() - item.get_start()
                     if latency <= 0:
-                        print("Negative time", latency)
+                        logger.error("Negative time %s", latency)
                     else:
-                        self.accumulators[traffic_class]["latency"].append(
-                            latency)
+                        self.accumulators[traffic_class]["latency"].append(latency)
                         self.stat[tech][traffic_class]["revenue"] += 1
                         self.stat[tech][traffic_class]["packet_count"] += 1
                     queue.task_done()
             except Exception as error:
                 if type(error) is Empty:
                     if time.time() - start > self.total_simulation_time + 2:
-                        print("Processor finish", tech)
+                        logger.info("Processor finish %s", tech)
                         self.processors_finish += 1
                         break
                     continue
-                print("Exception", error)
+                logger.error(error)
 
     def print_stat(self):
         start = time.time()
         start_interval = start
         while True:
-            if (self.processors_finish.value > 0
-                    and self.generators_finish.value > 0
-                    and self.processors_finish.value == len(
-                        self.list_processor_threads)
-                    and self.generators_finish.value == len(
-                        self.list_generator_threads)):
-                print("Finish monitor")
+            if (
+                self.processors_finish.value > 0
+                and self.generators_finish.value > 0
+                and self.processors_finish.value == len(self.list_processor_threads)
+                and self.generators_finish.value == len(self.list_generator_threads)
+            ):
+                logger.info("Finish monitor")
                 return
 
             if time.time() - start_interval < self.stat_interval:
@@ -190,16 +174,17 @@ class NetworkEnv(gym.Env):
                 for k, v in value.items():
                     if k == "latency":
                         latency = np.mean(v) / 1e6
-                        log_str += ". latency: " + str(round(latency,
-                                                             2)) + " ms"
+                        log_str += ". latency: " + str(round(latency, 2)) + " ms"
                         self.state_snapshot[tf]["latency"].append(latency)
                     else:
                         total_processed = self.scale_factor * (
-                            v.value * self.generator_setting[tf]["packet_size"]
-                            * 8 / 1e6)
+                            v.value
+                            * self.generator_setting[tf]["packet_size"]
+                            * 8
+                            / 1e6
+                        )
                         throughput = total_processed / self.stat_interval
-                        log_str += ". " + k + ": " + str(round(throughput,
-                                                               2)) + " mbps"
+                        log_str += ". " + k + ": " + str(round(throughput, 2)) + " mbps"
                         v.value = 0
                 print(log_str)
                 longest = max(longest, len(log_str))
@@ -211,46 +196,70 @@ class NetworkEnv(gym.Env):
                 total_data = 0
                 rev_factor = self.processor_setting[tech]["revenue_factor"]
                 for tf, v in value.items():
-                    tf_rev = (self.generator_setting[tf]["price"] *
-                              self.generator_setting[tf]["packet_size"] *
-                              v["revenue"].value / 8 / 1e6)
-                    tf_loss = (self.generator_setting[tf]["price"] *
-                               self.generator_setting[tf]["packet_size"] *
-                               v["loss"].value / 8 / 1e6)
+                    tf_rev = (
+                        self.generator_setting[tf]["price"]
+                        * self.generator_setting[tf]["packet_size"]
+                        * v["revenue"].value
+                        / 8
+                        / 1e6
+                    )
+                    tf_loss = (
+                        self.generator_setting[tf]["price"]
+                        * self.generator_setting[tf]["packet_size"]
+                        * v["loss"].value
+                        / 8
+                        / 1e6
+                    )
                     total_revenue += self.scale_factor * tf_rev
                     total_loss += self.scale_factor * tf_loss
                     total_data += self.scale_factor * (
-                        v["packet_count"].value *
-                        self.generator_setting[tf]["packet_size"] * 8)
+                        v["packet_count"].value
+                        * self.generator_setting[tf]["packet_size"]
+                        * 8
+                    )
                     throughput = self.scale_factor * (
-                        v["packet_count"].value *
-                        self.generator_setting[tf]["packet_size"] * 8 /
-                        (self.stat_interval * 1e6))
-                    self.state_snapshot[tf]["throughput"][tech].append(
-                        throughput)
-                    log_str += (". " + tf + ". R: " + str(round(tf_rev, 2)) +
-                                "$. L: " + str(round(tf_loss, 2)) + "$. T: " +
-                                str(round(throughput, 2)) + " mbps")
+                        v["packet_count"].value
+                        * self.generator_setting[tf]["packet_size"]
+                        * 8
+                        / (self.stat_interval * 1e6)
+                    )
+                    self.state_snapshot[tf]["throughput"][tech].append(throughput)
+                    log_str += (
+                        ". "
+                        + tf
+                        + ". R: "
+                        + str(round(tf_rev, 2))
+                        + "$. L: "
+                        + str(round(tf_loss, 2))
+                        + "$. T: "
+                        + str(round(throughput, 2))
+                        + " mbps"
+                    )
                     v["packet_count"].value = 0
                 log_str += (
-                    "|All. R: " + str(round(total_revenue * rev_factor, 2)) +
-                    "$. L: " + str(round(total_loss * rev_factor, 2)) +
-                    "$. T: " +
-                    str(round(total_data /
-                              (self.stat_interval * 1e6), 2)) + " mbps")
-                print(log_str)
+                    "|All. R: "
+                    + str(round(total_revenue * rev_factor, 2))
+                    + "$. L: "
+                    + str(round(total_loss * rev_factor, 2))
+                    + "$. T: "
+                    + str(round(total_data / (self.stat_interval * 1e6), 2))
+                    + " mbps"
+                )
+                logger.info(log_str)
                 longest = max(longest, len(log_str))
 
             separator = "=" * longest
-            print("Queue.", self.get_queue_status())
-            print(separator)
+            logger.info("Queue. %s", self.get_queue_status())
+            logger.info(separator)
             start_interval = time.time()
 
     def get_queue_status(self):
         result = ""
         for tech, value in self.queue.items():
-            max_queue_size = (self.processor_setting[tech]["limit"] *
-                              self.processor_setting[tech]["num_thread"])
+            max_queue_size = (
+                self.processor_setting[tech]["limit"]
+                * self.processor_setting[tech]["num_thread"]
+            )
             percent = value.qsize() / max_queue_size
             result += tech + ": " + str(round(percent, 2)) + ". "
             for tf, val in self.generator_setting.items():
@@ -261,11 +270,7 @@ class NetworkEnv(gym.Env):
         # (TF[i]_throughtput_tech[k], TF[i]_latency, queue_load_tech[k])
         self.state_snapshot = {}
         for tf, setting in self.generator_setting.items():
-            self.state_snapshot[tf] = {
-                "latency": [],
-                "throughput": {},
-                "queue": {}
-            }
+            self.state_snapshot[tf] = {"latency": [], "throughput": {}, "queue": {}}
             for tech, v in self.processor_setting.items():
                 self.state_snapshot[tf]["throughput"][tech] = []
                 self.state_snapshot[tf]["queue"][tech] = []
@@ -335,11 +340,10 @@ class NetworkEnv(gym.Env):
 
         log_thread.join()
 
-        print(
-            "Finish step. Queue {" + self.get_queue_status() + "}.",
-            "Total time:",
+        logger.info(
+            "Finish step. Queue %s. Total time: %s s",
+            self.get_queue_status() + "}.",
             str(round(time.time() - start_step, 2)),
-            "s",
         )
         # print(self.state_snapshot)
         state, reward, terminated = self.get_current_state_and_reward()
@@ -369,8 +373,10 @@ class NetworkEnv(gym.Env):
                 arr = np.array(val)
                 non_zero_elements = arr[arr != 0]
                 mean_non_zero = 0
-                max_mbps = (self.processor_setting[tech]["num_thread"] *
-                            self.processor_setting[tech]["rate"])
+                max_mbps = (
+                    self.processor_setting[tech]["num_thread"]
+                    * self.processor_setting[tech]["rate"]
+                )
                 if non_zero_elements.size > 0:
                     mean_non_zero = np.mean(non_zero_elements)
                 # normalize throughput
@@ -402,35 +408,38 @@ class NetworkEnv(gym.Env):
         total_revenue = 0
         for tech, value in self.stat.items():
             for tf, val in value.items():
-                processed = (val["revenue"].value *
-                             self.generator_setting[tf]["packet_size"] *
-                             self.generator_setting[tf]["price"] / 8 / 1e6)
+                processed = (
+                    val["revenue"].value
+                    * self.generator_setting[tf]["packet_size"]
+                    * self.generator_setting[tf]["price"]
+                    / 8
+                    / 1e6
+                )
                 processed_tf[tf] += processed
                 total_revenue += (
-                    processed * self.processor_setting[tech]["revenue_factor"])
+                    processed * self.processor_setting[tech]["revenue_factor"]
+                )
 
-        max_revenue = (sum(processed_tf.values()) *
-                       self.processor_setting[max_rev_tech]["revenue_factor"])
+        max_revenue = (
+            sum(processed_tf.values())
+            * self.processor_setting[max_rev_tech]["revenue_factor"]
+        )
 
         reward_revenue = 0
         if max_revenue > 0:
             reward_revenue = total_revenue / max_revenue
-        final_reward = (self.reward_factor["qos"] *
-                        self.sigmoid(np.mean(reward_qos).item()) +
-                        self.reward_factor["revenue"] * reward_revenue)
+        final_reward = (
+            self.reward_factor["qos"] * self.sigmoid(np.mean(reward_qos).item())
+            + self.reward_factor["revenue"] * reward_revenue
+        )
         terminal = qos_violated == 0 and queue_violated == 0
-        print(
-            "Max rev:",
+        logger.info(
+            "Max rev: %s, real rev: %s, qos_violated: %s, queue_violated: %s, terminated: %s, reward: %s",
             max_revenue,
-            "real rev:",
             total_revenue,
-            "qos_violated:",
             qos_violated,
-            "queue_violated:",
             queue_violated,
-            "terminated:",
             terminal,
-            "reward:",
             final_reward,
         )
         if max_revenue == 0:
@@ -438,7 +447,7 @@ class NetworkEnv(gym.Env):
         return final_state, final_reward, terminal
 
     def reset(self):
-        print("Reset env")
+        logger.info("Reset env")
         self.init_queue()
         return np.zeros(self.state_shape), {}
         # for k, q in self.queue.items():
