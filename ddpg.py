@@ -1,4 +1,7 @@
 import os
+import logging
+import logging.config
+import yaml
 
 os.environ["KERAS_BACKEND"] = "tensorflow"
 
@@ -10,6 +13,13 @@ import gymnasium as gym
 import numpy as np
 import matplotlib.pyplot as plt
 from network import NetworkEnv
+
+with open('logging_config.yaml', 'r') as f:
+    config = yaml.safe_load(f.read())
+
+logging.config.dictConfig(config)
+logger = logging.getLogger('my_logger')
+logger.info('This is an info message')
 
 env = NetworkEnv()
 state_shape = env.get_state_shape()
@@ -24,7 +34,6 @@ lower_bound = env.action_space.low[0]
 
 print("Max Value of Action ->  {}".format(upper_bound))
 print("Min Value of Action ->  {}".format(lower_bound))
-
 """
 To implement better exploration by the Actor network, we use noisy perturbations,
 specifically
@@ -34,7 +43,13 @@ It samples noise from a correlated normal distribution.
 
 
 class OUActionNoise:
-    def __init__(self, mean, std_deviation, theta=0.15, dt=1e-2, x_initial=None):
+
+    def __init__(self,
+                 mean,
+                 std_deviation,
+                 theta=0.15,
+                 dt=1e-2,
+                 x_initial=None):
         self.theta = theta
         self.mean = mean
         self.std_dev = std_deviation
@@ -44,11 +59,9 @@ class OUActionNoise:
 
     def __call__(self):
         # Formula taken from https://www.wikipedia.org/wiki/Ornstein-Uhlenbeck_process
-        x = (
-            self.x_prev
-            + self.theta * (self.mean - self.x_prev) * self.dt
-            + self.std_dev * np.sqrt(self.dt) * np.random.normal(size=self.mean.shape)
-        )
+        x = (self.x_prev + self.theta * (self.mean - self.x_prev) * self.dt +
+             self.std_dev * np.sqrt(self.dt) *
+             np.random.normal(size=self.mean.shape))
         # Store x into x_prev
         # Makes next noise dependent on current one
         self.x_prev = x
@@ -62,6 +75,7 @@ class OUActionNoise:
 
 
 class Buffer:
+
     def __init__(self, buffer_capacity=100000, batch_size=64):
         # Number of "experiences" to store at max
         self.buffer_capacity = buffer_capacity
@@ -82,7 +96,7 @@ class Buffer:
     def record(self, obs_tuple):
         # Set index to zero if buffer_capacity is exceeded,
         # replacing old records
-        index = self.buffer_counter % self.buffer_capacity        
+        index = self.buffer_counter % self.buffer_capacity
         self.state_buffer[index] = np.array(obs_tuple[0])
         self.action_buffer[index] = np.array(obs_tuple[1])
         self.reward_buffer[index] = np.array(obs_tuple[2])
@@ -106,15 +120,15 @@ class Buffer:
         with tf.GradientTape() as tape:
             target_actions = target_actor(next_state_batch, training=True)
             y = reward_batch + gamma * target_critic(
-                [next_state_batch, target_actions], training=True
-            )
-            critic_value = critic_model([state_batch, action_batch], training=True)
+                [next_state_batch, target_actions], training=True)
+            critic_value = critic_model([state_batch, action_batch],
+                                        training=True)
             critic_loss = keras.ops.mean(keras.ops.square(y - critic_value))
 
-        critic_grad = tape.gradient(critic_loss, critic_model.trainable_variables)
+        critic_grad = tape.gradient(critic_loss,
+                                    critic_model.trainable_variables)
         critic_optimizer.apply_gradients(
-            zip(critic_grad, critic_model.trainable_variables)
-        )
+            zip(critic_grad, critic_model.trainable_variables))
 
         with tf.GradientTape() as tape:
             actions = actor_model(state_batch, training=True)
@@ -125,8 +139,7 @@ class Buffer:
 
         actor_grad = tape.gradient(actor_loss, actor_model.trainable_variables)
         actor_optimizer.apply_gradients(
-            zip(actor_grad, actor_model.trainable_variables)
-        )
+            zip(actor_grad, actor_model.trainable_variables))
 
     # We compute the loss and update parameters
     def learn(self):
@@ -136,13 +149,15 @@ class Buffer:
         batch_indices = np.random.choice(record_range, self.batch_size)
 
         # Convert to tensors
-        state_batch = keras.ops.convert_to_tensor(self.state_buffer[batch_indices])
-        action_batch = keras.ops.convert_to_tensor(self.action_buffer[batch_indices])
-        reward_batch = keras.ops.convert_to_tensor(self.reward_buffer[batch_indices])
+        state_batch = keras.ops.convert_to_tensor(
+            self.state_buffer[batch_indices])
+        action_batch = keras.ops.convert_to_tensor(
+            self.action_buffer[batch_indices])
+        reward_batch = keras.ops.convert_to_tensor(
+            self.reward_buffer[batch_indices])
         reward_batch = keras.ops.cast(reward_batch, dtype="float32")
         next_state_batch = keras.ops.convert_to_tensor(
-            self.next_state_buffer[batch_indices]
-        )
+            self.next_state_buffer[batch_indices])
 
         self.update(state_batch, action_batch, reward_batch, next_state_batch)
 
@@ -154,7 +169,8 @@ def update_target(target, original, tau):
     original_weights = original.get_weights()
 
     for i in range(len(target_weights)):
-        target_weights[i] = original_weights[i] * tau + target_weights[i] * (1 - tau)
+        target_weights[i] = original_weights[i] * tau + target_weights[i] * (
+            1 - tau)
 
     target.set_weights(target_weights)
 
@@ -243,7 +259,8 @@ def policy(state, noise_object):
 """
 
 std_dev = 0.3
-ou_noise = OUActionNoise(mean=np.zeros(action_shape), std_deviation=float(std_dev) * np.ones(action_shape))
+ou_noise = OUActionNoise(mean=np.zeros(action_shape),
+                         std_deviation=float(std_dev) * np.ones(action_shape))
 
 actor_model = get_actor()
 critic_model = get_critic()
@@ -269,7 +286,6 @@ gamma = 0.99
 tau = 0.005
 
 buffer = Buffer(50000, 64)
-
 """
 Now we implement our main training loop, and iterate over episodes.
 We sample actions using `policy()` and train with `learn()` at each time step,
@@ -286,11 +302,11 @@ for ep in range(total_episodes):
     prev_state, _ = env.reset()
     episodic_reward = 0
     print("==================TRAINING EPISODE", ep, "==================")
-    print("==================AVG REWARD", np.mean(ep_reward_list), "==================")
+    print("==================AVG REWARD", np.mean(ep_reward_list),
+          "==================")
     while True:
         tf_prev_state = keras.ops.expand_dims(
-            keras.ops.convert_to_tensor(prev_state), 0
-        )
+            keras.ops.convert_to_tensor(prev_state), 0)
 
         action = policy(tf_prev_state, ou_noise)
         print("action", action)
@@ -324,7 +340,6 @@ plt.plot(avg_reward_list)
 plt.xlabel("Episode")
 plt.ylabel("Avg. Episodic Reward")
 plt.show()
-
 
 # Save the weights
 actor_model.save_weights("pendulum_actor.weights.h5")
