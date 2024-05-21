@@ -169,17 +169,17 @@ class NetworkEnv(gym.Env):
                 continue
 
             longest = 0
-            for tf, value in self.accumulators.items():
-                log_str = tf
+            for tc, value in self.accumulators.items():
+                log_str = tc
                 for k, v in value.items():
                     if k == "latency":
                         latency = np.mean(v) / 1e6
                         log_str += ". latency: " + str(round(latency, 2)) + " ms"
-                        self.state_snapshot[tf]["latency"].append(latency)
+                        self.state_snapshot[tc]["latency"].append(latency)
                     else:
                         total_processed = self.scale_factor * (
                             v.value
-                            * self.generator_setting[tf]["packet_size"]
+                            * self.generator_setting[tc]["packet_size"]
                             * 8
                             / 1e6
                         )
@@ -195,17 +195,17 @@ class NetworkEnv(gym.Env):
                 total_loss = 0
                 total_data = 0
                 rev_factor = self.processor_setting[tech]["revenue_factor"]
-                for tf, v in value.items():
+                for tc, v in value.items():
                     tf_rev = (
-                        self.generator_setting[tf]["price"]
-                        * self.generator_setting[tf]["packet_size"]
+                        self.generator_setting[tc]["price"]
+                        * self.generator_setting[tc]["packet_size"]
                         * v["revenue"].value
                         / 8
                         / 1e6
                     )
                     tf_loss = (
-                        self.generator_setting[tf]["price"]
-                        * self.generator_setting[tf]["packet_size"]
+                        self.generator_setting[tc]["price"]
+                        * self.generator_setting[tc]["packet_size"]
                         * v["loss"].value
                         / 8
                         / 1e6
@@ -214,19 +214,19 @@ class NetworkEnv(gym.Env):
                     total_loss += self.scale_factor * tf_loss
                     total_data += self.scale_factor * (
                         v["packet_count"].value
-                        * self.generator_setting[tf]["packet_size"]
+                        * self.generator_setting[tc]["packet_size"]
                         * 8
                     )
                     throughput = self.scale_factor * (
                         v["packet_count"].value
-                        * self.generator_setting[tf]["packet_size"]
+                        * self.generator_setting[tc]["packet_size"]
                         * 8
                         / (self.stat_interval * 1e6)
                     )
-                    self.state_snapshot[tf]["throughput"][tech].append(throughput)
+                    self.state_snapshot[tc]["throughput"][tech].append(throughput)
                     log_str += (
                         ". "
-                        + tf
+                        + tc
                         + ". R: "
                         + str(round(tf_rev, 2))
                         + "$. L: "
@@ -262,18 +262,18 @@ class NetworkEnv(gym.Env):
             )
             percent = value.qsize() / max_queue_size
             result += tech + ": " + str(round(percent, 2)) + ". "
-            for tf, val in self.generator_setting.items():
-                self.state_snapshot[tf]["queue"][tech].append(percent)
+            for tc, val in self.generator_setting.items():
+                self.state_snapshot[tc]["queue"][tech].append(percent)
         return result
 
     def step(self, action):
         # (TF[i]_throughtput_tech[k], TF[i]_latency, queue_load_tech[k])
         self.state_snapshot = {}
-        for tf, setting in self.generator_setting.items():
-            self.state_snapshot[tf] = {"latency": [], "throughput": {}, "queue": {}}
+        for tc, setting in self.generator_setting.items():
+            self.state_snapshot[tc] = {"latency": [], "throughput": {}, "queue": {}}
             for tech, v in self.processor_setting.items():
-                self.state_snapshot[tf]["throughput"][tech] = []
-                self.state_snapshot[tf]["queue"][tech] = []
+                self.state_snapshot[tc]["throughput"][tech] = []
+                self.state_snapshot[tc]["queue"][tech] = []
         self.generators = {}
         self.accumulators = {}
         self.stat = {}
@@ -295,8 +295,8 @@ class NetworkEnv(gym.Env):
                 )
                 self.list_processor_threads.append(processor)
 
-            for tf in self.generator_setting.keys():
-                self.stat[key][tf] = {
+            for tc in self.generator_setting.keys():
+                self.stat[key][tc] = {
                     "revenue": AtomicLong(0),
                     "packet_count": AtomicLong(0),
                     "loss": AtomicLong(0),
@@ -361,11 +361,11 @@ class NetworkEnv(gym.Env):
         queue_violated = 0
         self.last_latency = {}
         self.last_revenue = 0
-        for tf, value in self.state_snapshot.items():
+        for tc, value in self.state_snapshot.items():
             # [latency, nr_throughput, wf_throughput, nr_queue, wf_queue]
-            tf_qos_latency = self.generator_setting[tf]["qos_latency_ms"]
-            mean_latency = np.mean(self.state_snapshot[tf]["latency"]).item()
-            self.last_latency[tf] = mean_latency
+            tf_qos_latency = self.generator_setting[tc]["qos_latency_ms"]
+            mean_latency = np.mean(self.state_snapshot[tc]["latency"]).item()
+            self.last_latency[tc] = mean_latency
             qos_ratio = mean_latency / tf_qos_latency
             tf_val = [qos_ratio]
             if qos_ratio > 1:
@@ -406,19 +406,19 @@ class NetworkEnv(gym.Env):
             key=lambda item: self.processor_setting[item]["revenue_factor"],
         )
         processed_tf = {}
-        for tf, value in self.generator_setting.items():
-            processed_tf[tf] = 0
+        for tc, value in self.generator_setting.items():
+            processed_tf[tc] = 0
         total_revenue = 0
         for tech, value in self.stat.items():
-            for tf, val in value.items():
+            for tc, val in value.items():
                 processed = (
                     val["revenue"].value
-                    * self.generator_setting[tf]["packet_size"]
-                    * self.generator_setting[tf]["price"]
+                    * self.generator_setting[tc]["packet_size"]
+                    * self.generator_setting[tc]["price"]
                     / 8
                     / 1e6
                 )
-                processed_tf[tf] += processed
+                processed_tf[tc] += processed
                 total_revenue += (
                     processed * self.processor_setting[tech]["revenue_factor"]
                 )
