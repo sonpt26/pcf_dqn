@@ -9,7 +9,7 @@ with open("logging_config.yaml", "r") as f:
 
 logging.config.dictConfig(config)
 logger = logging.getLogger("my_logger")
-logger.info("This is an info message")
+# logger.info("This is an info message")
 
 import keras
 from keras.layers import Input, Dense, Concatenate, Flatten
@@ -242,7 +242,7 @@ actor_lr = 0.001
 critic_optimizer = keras.optimizers.Adam(critic_lr)
 actor_optimizer = keras.optimizers.Adam(actor_lr)
 
-total_episodes = 50
+total_episodes = 10
 # Discount factor for future rewards
 gamma = 0.99
 # Used to update target networks
@@ -259,24 +259,34 @@ along with updating the Target networks at a rate `tau`.
 ep_reward_list = []
 # To store average reward history of last few episodes
 avg_reward_list = []
+ep_latency_list = {}
+ep_revenue_list = []
 
 # Takes about 4 min to train
 for ep in range(total_episodes):
     prev_state, _ = env.reset()
     episodic_reward = 0
     logger.info("==================TRAINING EPISODE %s==================", ep)
-    logger.info(
-        "==================AVG REWARD %s==================", np.mean(ep_reward_list)
-    )
     while True:
         tf_prev_state = keras.ops.expand_dims(
             keras.ops.convert_to_tensor(prev_state), 0
         )
 
         action = policy(tf_prev_state, ou_noise)
-        # print("action", action)
+        logger.info("action %s", action)
         # Recieve state and reward from environment.
         state, reward, done, _ = env.step(action)
+
+        latency = env.get_last_step_latency()
+        for clas, value in latency.items():
+            if clas not in ep_latency_list:
+                ep_latency_list[clas] = []
+            ep_latency_list[clas].append(value)
+
+        revenue = env.get_last_step_revenue()
+        ep_revenue_list.append(revenue)
+
+        logger.info("Episode %s. Latency: %s. Revenue: %s$", ep, latency, revenue)
 
         buffer.record((prev_state, action, reward, state))
         episodic_reward += reward
@@ -287,8 +297,8 @@ for ep in range(total_episodes):
         update_target(target_critic, critic_model, tau)
 
         # End this episode when `done` or `truncated` is True
-        if done:
-            break
+        # if done:
+        break
 
         prev_state = state
 
@@ -301,14 +311,31 @@ for ep in range(total_episodes):
 
 # Plotting graph
 # Episodes versus Avg. Rewards
+plt.figure(figsize=(10, 6))
 plt.plot(avg_reward_list)
 plt.xlabel("Episode")
 plt.ylabel("Avg. Episodic Reward")
-plt.show()
+plt.savefig("./result/avg_reward.png")
+# plt.show()
+
+plt.figure(figsize=(10, 6))
+for tc, val in ep_latency_list.items():    
+    plt.plot(val, label=tc)
+
+plt.legend()
+plt.xlabel("Episode")
+plt.ylabel("Latency")
+plt.savefig("./result/avg_latency.png")
+
+plt.figure(figsize=(10, 6))
+plt.plot(ep_revenue_list)
+plt.xlabel("Episode")
+plt.ylabel("Revenue")
+plt.savefig("./result/avg_revenue.png")
 
 # Save the weights
-actor_model.save_weights("pendulum_actor.weights.h5")
-critic_model.save_weights("pendulum_critic.weights.h5")
+actor_model.save_weights("./result/pcf_dqn_actor.weights.h5")
+critic_model.save_weights("./result/pcf_dqn_critic.weights.h5")
 
-target_actor.save_weights("pendulum_target_actor.weights.h5")
-target_critic.save_weights("pendulum_target_critic.weights.h5")
+target_actor.save_weights("./result/pcf_dqn_target_actor.weights.h5")
+target_critic.save_weights("./result/pcf_dqn_target_critic.weights.h5")

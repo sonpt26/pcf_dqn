@@ -15,7 +15,7 @@ handlers:
     class: logging.FileHandler
     level: DEBUG
     formatter: standard
-    filename: app.log
+    filename: result/app.log
     mode: a
 
 loggers:

@@ -186,7 +186,7 @@ class NetworkEnv(gym.Env):
                         throughput = total_processed / self.stat_interval
                         log_str += ". " + k + ": " + str(round(throughput, 2)) + " mbps"
                         v.value = 0
-                print(log_str)
+                logger.info(log_str)
                 longest = max(longest, len(log_str))
 
             for tech, value in self.stat.items():
@@ -342,7 +342,7 @@ class NetworkEnv(gym.Env):
 
         logger.info(
             "Finish step. Queue %s. Total time: %s s",
-            self.get_queue_status() + "}.",
+            self.get_queue_status(),
             str(round(time.time() - start_step, 2)),
         )
         # print(self.state_snapshot)
@@ -359,10 +359,13 @@ class NetworkEnv(gym.Env):
         reward_revenue = 0
         qos_violated = 0
         queue_violated = 0
+        self.last_latency = {}
+        self.last_revenue = 0
         for tf, value in self.state_snapshot.items():
             # [latency, nr_throughput, wf_throughput, nr_queue, wf_queue]
             tf_qos_latency = self.generator_setting[tf]["qos_latency_ms"]
             mean_latency = np.mean(self.state_snapshot[tf]["latency"]).item()
+            self.last_latency[tf] = mean_latency
             qos_ratio = mean_latency / tf_qos_latency
             tf_val = [qos_ratio]
             if qos_ratio > 1:
@@ -433,6 +436,7 @@ class NetworkEnv(gym.Env):
             + self.reward_factor["revenue"] * reward_revenue
         )
         terminal = qos_violated == 0 and queue_violated == 0
+        self.last_revenue = total_revenue
         logger.info(
             "Max rev: %s, real rev: %s, qos_violated: %s, queue_violated: %s, terminated: %s, reward: %s",
             max_revenue,
@@ -445,6 +449,12 @@ class NetworkEnv(gym.Env):
         if max_revenue == 0:
             return final_state, 0, terminal
         return final_state, final_reward, terminal
+
+    def get_last_step_latency(self):        
+        return self.last_latency
+
+    def get_last_step_revenue(self):        
+        return self.last_revenue
 
     def reset(self):
         logger.info("Reset env")
@@ -465,21 +475,3 @@ class NetworkEnv(gym.Env):
 
     def close(self):
         pass
-
-
-# env = NetworkEnv()
-# observation = env.reset()
-# print(env.get_action_shape())
-# print(env.get_state_shape())
-# while True:
-#     action = env.action_space.sample()
-#     # action = [1, 0.25, 0.5]
-#     observation, reward, done, _ = env.step(action)
-#     print("observation", observation, observation.shape)
-#     env.reset()
-#     time.sleep(1)
-#     print("$$$$$$$$$$$$$$$$$$$$$")
-# action = [1, 1, 1]
-# NR. TF1. R: 63.28$. L: 11.38$. T: 143.88 mbps. TF2. R: 221.95$. L: 33.4$. T: 251.45 mbps. TF3. R: 10.18$. L: 3.46$. T: 77.99 mbps|All. R: 2954.07$. L: 482.42$. T: 473.32 mbps
-# action = [1, 0.5, 1]
-# NR. TF1. R: 70.45$. L: 0.0$. T: 145.44 mbps. TF2. R: 117.94$. L: 0.0$. T: 121.31 mbps. TF3. R: 13.43$. L: 0.0$. T: 94.54 mbps|All. R: 2018.15$. L: 0.0$. T: 361.28 mbps
