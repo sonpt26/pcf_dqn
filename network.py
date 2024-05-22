@@ -237,8 +237,7 @@ class NetworkEnv(gym.Env):
                 continue
 
             longest = 0
-            for tc, value in self.accumulators.items():
-                print(tc)
+            for tc, value in self.accumulators.items():                
                 log_str = tc
                 for k, v in value.items():
                     if k == "latency":
