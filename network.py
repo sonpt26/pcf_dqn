@@ -8,6 +8,8 @@ from atomiclong import AtomicLong
 import timeit
 from queue import Empty
 import logging
+import yaml
+import json
 
 logger = logging.getLogger("my_logger")
 
@@ -29,39 +31,67 @@ class Packet:
 class NetworkEnv(gym.Env):
     metadata = {"render.modes": ["human"]}
 
-    def __init__(self):
+    def __init__(
+        self, generator_file=None, processor_file=None, clear_queue_step=False
+    ):
         super(NetworkEnv, self).__init__()
         # Parameters
         self.queue_max_utilization = 0.1
         self.scale_factor = 1
         self.reward_factor = {"qos": 0.5, "revenue": 0.5}
-        self.generator_setting = {
-            "TF1": {
-                "num_thread": 2,
-                "packet_size": 512,
-                "rate": 5,
-                "price": 10,
-                "qos_latency_ms": 4,
-            },
-            "TF2": {
-                "num_thread": 2,
-                "packet_size": 1024,
-                "rate": 6,
-                "price": 10,
-                "qos_latency_ms": 10,
-            },
-            "TF3": {
-                "num_thread": 5,
-                "packet_size": 1500,
-                "rate": 15,
-                "price": 30,
-                "qos_latency_ms": 20,
-            },
-        }
-        self.processor_setting = {
-            "NR": {"num_thread": 2, "limit": 500, "rate": 200, "revenue_factor": 0.9},
-            "WF": {"num_thread": 2, "limit": 500, "rate": 100, "revenue_factor": 0.1},
-        }
+        self.clear_queue_at_step = clear_queue_step
+        if generator_file is not None:
+            with open(generator_file, "r") as f:
+                self.generator_setting = yaml.safe_load(f.read())
+        else:
+            self.generator_setting = {
+                "TF1": {
+                    "num_thread": 2,
+                    "packet_size": 512,
+                    "rate": 5,
+                    "price": 10,
+                    "qos_latency_ms": 4,
+                },
+                "TF2": {
+                    "num_thread": 2,
+                    "packet_size": 1024,
+                    "rate": 6,
+                    "price": 10,
+                    "qos_latency_ms": 10,
+                },
+                "TF3": {
+                    "num_thread": 5,
+                    "packet_size": 1500,
+                    "rate": 15,
+                    "price": 30,
+                    "qos_latency_ms": 20,
+                },
+            }
+
+        if processor_file is not None:
+            with open(processor_file, "r") as f:
+                self.processor_setting = yaml.safe_load(f.read())
+        else:
+            self.processor_setting = {
+                "NR": {
+                    "num_thread": 2,
+                    "limit": 500,
+                    "rate": 200,
+                    "revenue_factor": 0.9,
+                },
+                "WF": {
+                    "num_thread": 2,
+                    "limit": 500,
+                    "rate": 100,
+                    "revenue_factor": 0.1,
+                },
+            }
+
+        logger.info(
+            "Create environment. Generator setting \n%s. \nProcessor setting \n%s",
+            json.dumps(self.generator_setting, indent=4),
+            json.dumps(self.processor_setting, indent=4),
+        )
         self.timeout_processor = 0.5
         self.total_simulation_time = 10  # seconds
         self.stat_interval = 2
@@ -129,6 +159,10 @@ class NetworkEnv(gym.Env):
         time_to_wait = packet_size_bytes * 8 / (target_throughput_mbps * 1e6)
         start_time = time.time()
         while True:
+            if self.stop:
+                logger.info("Generator finish %s", traffic_class)
+                # self.generators_finish += 1
+                break
             if self.pause:
                 time.sleep(0.1)
                 continue
@@ -143,10 +177,6 @@ class NetworkEnv(gym.Env):
                 queue.put(packet)
                 self.accumulators[traffic_class][choice] += 1
             timeit.time.sleep(time_to_wait)
-            if self.stop:
-                logger.info("Generator finish %s", traffic_class)
-                # self.generators_finish += 1
-                break
 
     def get_weights(self, traffic_class):
         proprotion_5G = self.action[self.traffic_classes.index(traffic_class)]
@@ -334,6 +364,8 @@ class NetworkEnv(gym.Env):
 
     def step(self, action):
         # (TF[i]_throughtput_tech[k], TF[i]_latency, queue_load_tech[k])
+        if self.clear_queue_at_step:
+            self.clear_queue()
         self.init_accum()
         self.action = action
         self.pause = False
@@ -346,8 +378,8 @@ class NetworkEnv(gym.Env):
             self.get_queue_status(),
             str(round(time.time() - start_step, 2)),
         )
-        state, reward, terminated = self.get_current_state_and_reward()
-        return state, reward, terminated, {}
+        state, reward, done, terminated = self.get_current_state_and_reward()
+        return state, reward, done, terminated, {}
 
     def sigmoid(self, x):
         return 1 / (1 + np.exp(-x))
@@ -358,6 +390,7 @@ class NetworkEnv(gym.Env):
         reward_revenue = 0
         qos_violated = 0
         queue_violated = 0
+        queue_terminate = 0
         self.last_latency = {}
         self.last_revenue = 0
         self.last_throughtput = {}
@@ -373,7 +406,7 @@ class NetworkEnv(gym.Env):
                 qos_violated += 1
             reward_qos.append(1 / qos_ratio)
             # normalize
-            for tech, val in value["throughput"].items():                
+            for tech, val in value["throughput"].items():
                 arr = np.array(val)
                 non_zero_elements = arr[arr != 0]
                 mean_non_zero = 0
@@ -392,6 +425,8 @@ class NetworkEnv(gym.Env):
                 mean_non_zero = 0
                 if arr.size > 0:
                     mean_non_zero = np.mean(arr)
+                    if mean_non_zero > 5:
+                        queue_terminate += 1
                 if mean_non_zero > self.queue_max_utilization:
                     queue_violated += 1
                 tf_val.append(mean_non_zero)
@@ -434,27 +469,31 @@ class NetworkEnv(gym.Env):
         if max_revenue > 0:
             reward_revenue = total_revenue / max_revenue
 
-        terminal = qos_violated == 0 and queue_violated == 0
+        done = qos_violated == 0 and queue_violated == 0
+        terminal = queue_terminate > 0
         final_reward = (
             self.reward_factor["qos"] * self.sigmoid(np.mean(reward_qos).item())
             + self.reward_factor["revenue"] * reward_revenue
         )
-        if terminal:
-            final_reward = 1000 * final_reward
+        if done:
+            final_reward = 10 * final_reward
+        else:
+            final_reward = 10 * (self.sigmoid(final_reward) - 1)
 
         self.last_revenue = total_revenue
         logger.info(
-            "Max rev: %s, real rev: %s, qos_violated: %s, queue_violated: %s, terminated: %s, reward: %s",
+            "Max rev: %s, real rev: %s, qos_violated: %s, queue_violated: %s, done: %s, terminated: %s, reward: %s",
             max_revenue,
             total_revenue,
             qos_violated,
             queue_violated,
+            done,
             terminal,
             final_reward,
         )
         if max_revenue == 0:
-            return final_state, 0, terminal
-        return final_state, final_reward, terminal
+            return final_state, 0, False, terminal
+        return final_state, final_reward, done, terminal
 
     def get_last_step_latency(self):
         return self.last_latency
@@ -468,8 +507,14 @@ class NetworkEnv(gym.Env):
     def reset(self):
         logger.info("Reset env")
         self.pause = True
-        self.init_queue()
+        self.clear_queue()
         return np.zeros(self.state_shape), {}
+
+    def clear_queue(self):
+        for tech, q in self.queue.items():
+            while not q.empty():
+                q.get()
+            logger.info("Queue %s cleared", tech)
 
     def render(self, mode="human"):
         print("Render not implemented")
@@ -482,4 +527,5 @@ class NetworkEnv(gym.Env):
         return self.observation_space.sample().shape
 
     def close(self):
+        logger.info("Close env. Stop all thread")
         self.stop = True

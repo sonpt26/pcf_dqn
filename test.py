@@ -12,14 +12,17 @@ with open("logging_config.yaml", "r") as f:
 logging.config.dictConfig(config)
 logger = logging.getLogger("my_logger")
 
-env = NetworkEnv()
-observation = env.reset()
-while True:
+for i in range(4):
+    env = NetworkEnv(
+        "setting/episode_" + str(i + 1) + "/generator.yaml",
+        "setting/episode_" + str(i + 1) + "/processor.yaml",
+    )
+    observation = env.reset()
     action = env.action_space.sample()
-    # action = [1, 0.25, 0.5]
+    # action = [0, 0, 0]
     logger.info("action %s", action)
-    observation, reward, done, _ = env.step(action)
+    observation, reward, done, term, _ = env.step(action)
     logger.info("observation %s", observation)
     # env.reset()
     time.sleep(1)
-    print("$$$$$$$$$$$$$$$$$$$$$")
+    env.close()

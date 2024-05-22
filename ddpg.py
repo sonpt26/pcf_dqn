@@ -2,17 +2,47 @@ import os
 import logging
 import logging.config
 import yaml
+import numpy as np
+import json
+import shutil
+import threading
+import sys
+import argparse
 
+#Create work dir
+if os.path.exists("./result"):
+    shutil.rmtree("./result")
+os.mkdir("./result")
 os.environ["KERAS_BACKEND"] = "tensorflow"
+
+#Config logging
 with open("logging_config.yaml", "r") as f:
     config = yaml.safe_load(f.read())
+logging.config.dictConfig(config)
+logger = logging.getLogger("my_logger")
+
+#parser argument
+parser = argparse.ArgumentParser()
+parser.add_argument("--clear_queue", help="Clear queue before each step")
+args = parser.parse_args()
+clear_queue_step = False
+if args.clear_queue:
+    clear_queue_step = True
+    logger.info("Clear queue before step is ON")
+
+import keras
+from keras.layers import Input, Dense, Concatenate, Flatten
+from keras.models import Model
+import tensorflow as tf
+import gymnasium as gym
+import matplotlib.pyplot as plt
+from network import NetworkEnv
+import time
+from pathlib import Path
 
 
 def numpy_representer(dumper, data):
     return dumper.represent_list(data.tolist())
-
-
-yaml.add_representer(np.ndarray, numpy_representer)
 
 
 def save_array_data_to_file(file_path, array):
@@ -20,20 +50,8 @@ def save_array_data_to_file(file_path, array):
         yaml.dump(array, file)
 
 
-logging.config.dictConfig(config)
-logger = logging.getLogger("my_logger")
-# logger.info("This is an info message")
-
-import keras
-from keras.layers import Input, Dense, Concatenate, Flatten
-from keras.models import Model
-import tensorflow as tf
-import gymnasium as gym
-import numpy as np
-import matplotlib.pyplot as plt
-from network import NetworkEnv
-
-env = NetworkEnv()
+yaml.add_representer(np.ndarray, numpy_representer)
+env = NetworkEnv(clear_queue_step=clear_queue_step)
 state_shape = env.get_state_shape()
 action_shape = env.get_action_shape()
 num_states = env.observation_space.shape[0]
@@ -52,6 +70,7 @@ specifically
 an **Ornstein-Uhlenbeck process** for generating noise, as described in the paper.
 It samples noise from a correlated normal distribution.
 """
+env.close()
 
 
 class OUActionNoise:
@@ -255,7 +274,7 @@ actor_lr = 0.001
 critic_optimizer = keras.optimizers.Adam(critic_lr)
 actor_optimizer = keras.optimizers.Adam(actor_lr)
 
-total_episodes = 100
+total_episodes = 5
 # Discount factor for future rewards
 gamma = 0.99
 # Used to update target networks
@@ -274,75 +293,118 @@ ep_reward_list = []
 avg_reward_list = []
 ep_latency_list = {}
 ep_revenue_list = []
+ep_throughput_list = []
 
-# Takes about 4 min to train
+directory_path = "./setting"
+specific_dir = Path(directory_path)
+# List all directories in the specified directory
+folders = [
+    name
+    for name in os.listdir(directory_path)
+    if os.path.isdir(os.path.join(directory_path, name))
+]
 
-prev_state, _ = env.reset()
-for ep in range(total_episodes):
+
+def build_path(base_path, *sub_paths):
+    path = Path(base_path)
+    for sub_path in sub_paths:
+        path /= sub_path
+    return path
+
+
+logger.info("Folders in directory: %s", directory_path)
+for folder in folders:
+    gen_setting = specific_dir / folder / "generator.yaml"
+    proc_setting = specific_dir / folder / "processor.yaml"
+    env = NetworkEnv(gen_setting, proc_setting, clear_queue_step)
     prev_state, _ = env.reset()
-    episodic_reward = 0
-    logger.info("==================TRAINING EPISODE %s==================", ep)
-    while True:
-        tf_prev_state = keras.ops.expand_dims(
-            keras.ops.convert_to_tensor(prev_state), 0
+    logger.info("==================TRAINING EPISODE %s==================", folder)
+    for ep in range(total_episodes):
+        episodic_reward = 0
+        logger.info(
+            "==================TRAINING EPISODE %s ITERATION %s==================",
+            folder,
+            ep,
         )
+        while True:
+            tf_prev_state = keras.ops.expand_dims(
+                keras.ops.convert_to_tensor(prev_state), 0
+            )
 
-        action = policy(tf_prev_state, ou_noise)
-        logger.info("action %s", action)
-        # Recieve state and reward from environment.
-        state, reward, done, _ = env.step(action)
+            action = policy(tf_prev_state, ou_noise)
+            array = np.array(action)
+            contains_nan = np.isnan(array).any()
+            if contains_nan:
+                logger.warn("=============NaN action %s. Retry=============", action)
+                continue
+            logger.info("action %s", action)
+            # Recieve state and reward from environment.
+            state, reward, done, terminated, _ = env.step(action)
 
-        latency = env.get_last_step_latency()
-        for clas, value in latency.items():
-            if clas not in ep_latency_list:
-                ep_latency_list[clas] = []
-            ep_latency_list[clas].append(value)
+            latency = env.get_last_step_latency()
+            for clas, value in latency.items():
+                if clas not in ep_latency_list:
+                    ep_latency_list[clas] = []
+                ep_latency_list[clas].append(value)
 
-        revenue = env.get_last_step_revenue()
-        ep_revenue_list.append(revenue)
+            revenue = env.get_last_step_revenue()
+            throughput = env.get_last_step_throughput()
+            ep_throughput_list.append(throughput)
+            ep_revenue_list.append(revenue)
 
-        logger.info("Episode %s. Latency: %s. Revenue: %s$", ep, latency, revenue)
+            logger.info("Episode %s. Latency: %s. Revenue: %s$", ep, latency, revenue)
 
-        buffer.record((prev_state, action, reward, state))
-        episodic_reward += reward
+            buffer.record((prev_state, action, reward, state))
+            episodic_reward += reward
 
-        buffer.learn()
+            buffer.learn()
 
-        update_target(target_actor, actor_model, tau)
-        update_target(target_critic, critic_model, tau)
+            update_target(target_actor, actor_model, tau)
+            update_target(target_critic, critic_model, tau)
 
-        # End this episode when `done` or `truncated` is True
-        if done:
-            break
+            # End this episode when `done` or `truncated` is True
+            if done or terminated:
+                break
 
-        prev_state = state
+            prev_state = state
 
-    ep_reward_list.append(episodic_reward)
+        ep_reward_list.append(episodic_reward)
 
-# Plotting graph
-# Episodes versus Avg. Rewards
-avg_reward_list = np.mean(ep_reward_list[-40:])
-plt.figure(figsize=(10, 6))
-plt.plot(avg_reward_list)
-plt.xlabel("Episode")
-plt.ylabel("Avg. Episodic Reward")
-plt.savefig("./result/avg_reward.png")
-# plt.show()
+    time.sleep(2)
+    env.close()
+    # Plotting graph
+    mypath = build_path("./result/", folder)
+    os.makedirs(mypath, exist_ok=True)
+    basepath = str(mypath)
 
-plt.figure(figsize=(10, 6))
-for tc, val in ep_latency_list.items():
-    plt.plot(val, label=tc)
+    # Episodes versus Avg. Rewards
+    avg_reward_list = np.mean(ep_reward_list[-40:])
+    plt.figure(figsize=(10, 6))
+    plt.plot(avg_reward_list)
+    plt.xlabel("Episode")
+    plt.ylabel("Avg. Episodic Reward")
+    plt.savefig(basepath + "/avg_reward.png")
+    # plt.show()
 
-plt.legend()
-plt.xlabel("Episode")
-plt.ylabel("Latency")
-plt.savefig("./result/avg_latency.png")
+    plt.figure(figsize=(10, 6))
+    for tc, val in ep_latency_list.items():
+        plt.plot(val, label=tc)
 
-plt.figure(figsize=(10, 6))
-plt.plot(ep_revenue_list)
-plt.xlabel("Episode")
-plt.ylabel("Revenue")
-plt.savefig("./result/avg_revenue.png")
+    plt.legend()
+    plt.xlabel("Episode")
+    plt.ylabel("Latency")
+    plt.savefig(basepath + "/avg_latency.png")
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(ep_revenue_list)
+    plt.xlabel("Episode")
+    plt.ylabel("Revenue")
+    plt.savefig(basepath + "/avg_revenue.png")
+
+    save_array_data_to_file(basepath + "/tps.yaml", json.dumps(ep_throughput_list))
+    save_array_data_to_file(basepath + "/revenue.yaml", ep_revenue_list)
+    for tc, val in ep_latency_list.items():
+        save_array_data_to_file(basepath + "/latency" + tc + ".yaml", val)
 
 # Save the weights
 actor_model.save_weights("./result/pcf_dqn_actor.weights.h5")
@@ -350,3 +412,4 @@ critic_model.save_weights("./result/pcf_dqn_critic.weights.h5")
 
 target_actor.save_weights("./result/pcf_dqn_target_actor.weights.h5")
 target_critic.save_weights("./result/pcf_dqn_target_critic.weights.h5")
+# sys.exit("Finish")

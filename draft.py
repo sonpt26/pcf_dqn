@@ -1,8 +1,22 @@
-import matplotlib.pyplot as plt
+import os
+from network import NetworkEnv
+from pathlib import Path
 
-ep_latency_list = {"TF1": [1, 2, 3], "TF2": [1, 2000, 300]}
-plt.figure(figsize=(10, 6))
-for tc, val in ep_latency_list.items():    
-    plt.plot(val, label=tc)
+directory_path = "./setting"
+specific_dir = Path(directory_path)
 
-plt.savefig("draft.png")
+
+# List all directories in the specified directory
+folders = [
+    name
+    for name in os.listdir(directory_path)
+    if os.path.isdir(os.path.join(directory_path, name))
+]
+
+# Print the list of folders
+print("Folders in directory:", directory_path)
+for folder in folders:
+    gen_setting = specific_dir / folder / "generator.yaml"
+    proc_setting = specific_dir / folder / "processor.yaml"    
+    env = NetworkEnv(gen_setting, proc_setting)
+
