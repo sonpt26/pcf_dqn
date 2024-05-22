@@ -9,26 +9,32 @@ import threading
 import sys
 import argparse
 
-#Create work dir
+# Create work dir
 if os.path.exists("./result"):
     shutil.rmtree("./result")
 os.mkdir("./result")
 os.environ["KERAS_BACKEND"] = "tensorflow"
 
-#Config logging
+# Config logging
 with open("logging_config.yaml", "r") as f:
     config = yaml.safe_load(f.read())
 logging.config.dictConfig(config)
 logger = logging.getLogger("my_logger")
 
-#parser argument
+# parser argument
 parser = argparse.ArgumentParser()
-parser.add_argument("--clear_queue", help="Clear queue before each step")
+parser.add_argument("--clear_queue", help="Clear queue before each step", default=False)
+parser.add_argument(
+    "--episode", help="Number of iteration for each scenario", default=100
+)
 args = parser.parse_args()
 clear_queue_step = False
 if args.clear_queue:
     clear_queue_step = True
     logger.info("Clear queue before step is ON")
+if args.episode:
+    total_episodes = args.episode
+    logger.info("Total iteration is %s", total_episodes)
 
 import keras
 from keras.layers import Input, Dense, Concatenate, Flatten
@@ -274,7 +280,6 @@ actor_lr = 0.001
 critic_optimizer = keras.optimizers.Adam(critic_lr)
 actor_optimizer = keras.optimizers.Adam(actor_lr)
 
-total_episodes = 5
 # Discount factor for future rewards
 gamma = 0.99
 # Used to update target networks
