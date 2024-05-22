@@ -7,6 +7,19 @@ os.environ["KERAS_BACKEND"] = "tensorflow"
 with open("logging_config.yaml", "r") as f:
     config = yaml.safe_load(f.read())
 
+
+def numpy_representer(dumper, data):
+    return dumper.represent_list(data.tolist())
+
+
+yaml.add_representer(np.ndarray, numpy_representer)
+
+
+def save_array_data_to_file(file_path, array):
+    with open(file_path, "w") as file:
+        yaml.dump(array, file)
+
+
 logging.config.dictConfig(config)
 logger = logging.getLogger("my_logger")
 # logger.info("This is an info message")
@@ -242,7 +255,7 @@ actor_lr = 0.001
 critic_optimizer = keras.optimizers.Adam(critic_lr)
 actor_optimizer = keras.optimizers.Adam(actor_lr)
 
-total_episodes = 10
+total_episodes = 0
 # Discount factor for future rewards
 gamma = 0.99
 # Used to update target networks
@@ -263,51 +276,43 @@ ep_latency_list = {}
 ep_revenue_list = []
 
 # Takes about 4 min to train
-for ep in range(total_episodes):
-    prev_state, _ = env.reset()
-    episodic_reward = 0
+
+prev_state, _ = env.reset()        
+while True:
     logger.info("==================TRAINING EPISODE %s==================", ep)
-    while True:
-        tf_prev_state = keras.ops.expand_dims(
-            keras.ops.convert_to_tensor(prev_state), 0
-        )
+    tf_prev_state = keras.ops.expand_dims(
+        keras.ops.convert_to_tensor(prev_state), 0
+    )
 
-        action = policy(tf_prev_state, ou_noise)
-        logger.info("action %s", action)
-        # Recieve state and reward from environment.
-        state, reward, done, _ = env.step(action)
+    action = policy(tf_prev_state, ou_noise)
+    logger.info("action %s", action)
+    # Recieve state and reward from environment.
+    state, reward, done, _ = env.step(action)
 
-        latency = env.get_last_step_latency()
-        for clas, value in latency.items():
-            if clas not in ep_latency_list:
-                ep_latency_list[clas] = []
-            ep_latency_list[clas].append(value)
+    latency = env.get_last_step_latency()
+    for clas, value in latency.items():
+        if clas not in ep_latency_list:
+            ep_latency_list[clas] = []
+        ep_latency_list[clas].append(value)
 
-        revenue = env.get_last_step_revenue()
-        ep_revenue_list.append(revenue)
+    revenue = env.get_last_step_revenue()
+    ep_revenue_list.append(revenue)
 
-        logger.info("Episode %s. Latency: %s. Revenue: %s$", ep, latency, revenue)
+    logger.info("Episode %s. Latency: %s. Revenue: %s$", ep, latency, revenue)
 
-        buffer.record((prev_state, action, reward, state))
-        episodic_reward += reward
+    buffer.record((prev_state, action, reward, state))
+    ep_reward_list.append(reward)
 
-        buffer.learn()
+    buffer.learn()
 
-        update_target(target_actor, actor_model, tau)
-        update_target(target_critic, critic_model, tau)
+    update_target(target_actor, actor_model, tau)
+    update_target(target_critic, critic_model, tau)
 
-        # End this episode when `done` or `truncated` is True
-        # if done:
+    # End this episode when `done` or `truncated` is True
+    if done:
         break
 
-        prev_state = state
-
-    ep_reward_list.append(episodic_reward)
-
-    # Mean of last 40 episodes
-    avg_reward = np.mean(ep_reward_list[-40:])
-    logger.info("Episode * %s * Avg Reward is ==> %s", ep, avg_reward)
-    avg_reward_list.append(avg_reward)
+    prev_state = state
 
 # Plotting graph
 # Episodes versus Avg. Rewards
@@ -319,7 +324,7 @@ plt.savefig("./result/avg_reward.png")
 # plt.show()
 
 plt.figure(figsize=(10, 6))
-for tc, val in ep_latency_list.items():    
+for tc, val in ep_latency_list.items():
     plt.plot(val, label=tc)
 
 plt.legend()
