@@ -341,8 +341,9 @@ for folder in folders:
             contains_nan = np.isnan(array).any()
             if contains_nan:
                 logger.warn("=============NaN action %s. Retry=============", action)
-                continue
-            logger.info("action %s", action)
+                env.reset()
+                break
+            logger.info("state: %s, action: %s", tf_prev_state, action)
             # Recieve state and reward from environment.
             state, reward, done, terminated, _ = env.step(action)
 
