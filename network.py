@@ -363,7 +363,7 @@ class NetworkEnv(gym.Env):
         self.last_throughtput = {}
         for tc, value in self.state_snapshot.items():
             # [latency, nr_throughput, wf_throughput, nr_queue, wf_queue]
-            self.last_throughtput
+            self.last_throughtput[tc] = {}
             tf_qos_latency = self.generator_setting[tc]["qos_latency_ms"]
             mean_latency = np.mean(self.state_snapshot[tc]["latency"]).item()
             self.last_latency[tc] = mean_latency
@@ -373,7 +373,7 @@ class NetworkEnv(gym.Env):
                 qos_violated += 1
             reward_qos.append(1 / qos_ratio)
             # normalize
-            for tech, val in value["throughput"].items():
+            for tech, val in value["throughput"].items():                
                 arr = np.array(val)
                 non_zero_elements = arr[arr != 0]
                 mean_non_zero = 0
@@ -384,6 +384,7 @@ class NetworkEnv(gym.Env):
                 if non_zero_elements.size > 0:
                     mean_non_zero = np.mean(non_zero_elements)
                 # normalize throughput
+                self.last_throughtput[tc][tech] = mean_non_zero
                 tf_val.append(mean_non_zero / max_mbps)
 
             for tech, val in value["queue"].items():
