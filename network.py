@@ -196,7 +196,7 @@ class NetworkEnv(gym.Env):
                     continue
                 logger.error(error)
 
-    def print_stat(self):        
+    def print_stat(self):
         while True:
             if self.stop:
                 logger.info("Finish monitor")
@@ -434,11 +434,12 @@ class NetworkEnv(gym.Env):
             reward_revenue = total_revenue / max_revenue
 
         terminal = qos_violated == 0 and queue_violated == 0
-
         final_reward = (
             self.reward_factor["qos"] * self.sigmoid(np.mean(reward_qos).item())
             + self.reward_factor["revenue"] * reward_revenue
         )
+        if terminal:
+            final_reward = 1000 * final_reward
 
         self.last_revenue = total_revenue
         logger.info(

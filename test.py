@@ -20,6 +20,6 @@ while True:
     logger.info("action %s", action)
     observation, reward, done, _ = env.step(action)
     logger.info("observation %s", observation)
-    env.reset()
+    # env.reset()
     time.sleep(1)
     print("$$$$$$$$$$$$$$$$$$$$$")

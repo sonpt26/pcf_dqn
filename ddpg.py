@@ -255,7 +255,7 @@ actor_lr = 0.001
 critic_optimizer = keras.optimizers.Adam(critic_lr)
 actor_optimizer = keras.optimizers.Adam(actor_lr)
 
-total_episodes = 0
+total_episodes = 100
 # Discount factor for future rewards
 gamma = 0.99
 # Used to update target networks
@@ -277,45 +277,51 @@ ep_revenue_list = []
 
 # Takes about 4 min to train
 
-prev_state, _ = env.reset()        
-while True:
+prev_state, _ = env.reset()
+for ep in range(total_episodes):
+    prev_state, _ = env.reset()
+    episodic_reward = 0
     logger.info("==================TRAINING EPISODE %s==================", ep)
-    tf_prev_state = keras.ops.expand_dims(
-        keras.ops.convert_to_tensor(prev_state), 0
-    )
+    while True:
+        tf_prev_state = keras.ops.expand_dims(
+            keras.ops.convert_to_tensor(prev_state), 0
+        )
 
-    action = policy(tf_prev_state, ou_noise)
-    logger.info("action %s", action)
-    # Recieve state and reward from environment.
-    state, reward, done, _ = env.step(action)
+        action = policy(tf_prev_state, ou_noise)
+        logger.info("action %s", action)
+        # Recieve state and reward from environment.
+        state, reward, done, _ = env.step(action)
 
-    latency = env.get_last_step_latency()
-    for clas, value in latency.items():
-        if clas not in ep_latency_list:
-            ep_latency_list[clas] = []
-        ep_latency_list[clas].append(value)
+        latency = env.get_last_step_latency()
+        for clas, value in latency.items():
+            if clas not in ep_latency_list:
+                ep_latency_list[clas] = []
+            ep_latency_list[clas].append(value)
 
-    revenue = env.get_last_step_revenue()
-    ep_revenue_list.append(revenue)
+        revenue = env.get_last_step_revenue()
+        ep_revenue_list.append(revenue)
 
-    logger.info("Episode %s. Latency: %s. Revenue: %s$", ep, latency, revenue)
+        logger.info("Episode %s. Latency: %s. Revenue: %s$", ep, latency, revenue)
 
-    buffer.record((prev_state, action, reward, state))
-    ep_reward_list.append(reward)
+        buffer.record((prev_state, action, reward, state))
+        episodic_reward += reward
 
-    buffer.learn()
+        buffer.learn()
 
-    update_target(target_actor, actor_model, tau)
-    update_target(target_critic, critic_model, tau)
+        update_target(target_actor, actor_model, tau)
+        update_target(target_critic, critic_model, tau)
 
-    # End this episode when `done` or `truncated` is True
-    if done:
-        break
+        # End this episode when `done` or `truncated` is True
+        if done:
+            break
 
-    prev_state = state
+        prev_state = state
+
+    ep_reward_list.append(episodic_reward)
 
 # Plotting graph
 # Episodes versus Avg. Rewards
+avg_reward_list = np.mean(ep_reward_list[-40:])
 plt.figure(figsize=(10, 6))
 plt.plot(avg_reward_list)
 plt.xlabel("Episode")
