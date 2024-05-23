@@ -18,8 +18,8 @@ for i in range(4):
         "setting/episode_" + str(i + 1) + "/processor.yaml",
     )
     observation = env.reset()
-    action = env.action_space.sample()
-    # action = [0, 0, 0]
+    # action = env.action_space.sample()
+    action = [0, 0, 0]
     logger.info("action %s", action)
     observation, reward, done, term, _ = env.step(action)
     logger.info("observation %s", observation)

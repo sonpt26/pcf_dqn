@@ -398,7 +398,7 @@ class NetworkEnv(gym.Env):
             # [latency, nr_throughput, wf_throughput, nr_queue, wf_queue]
             self.last_throughtput[tc] = {}
             tf_qos_latency = self.generator_setting[tc]["qos_latency_ms"]
-            mean_latency = np.mean(self.state_snapshot[tc]["latency"]).item()
+            mean_latency = np.nanmean(self.state_snapshot[tc]["latency"]).item()
             self.last_latency[tc] = mean_latency
             qos_ratio = mean_latency / tf_qos_latency
             tf_val = [qos_ratio]
