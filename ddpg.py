@@ -25,7 +25,7 @@ logger = logging.getLogger("my_logger")
 parser = argparse.ArgumentParser()
 parser.add_argument("--clear_queue", help="Clear queue before each step", default=False)
 parser.add_argument(
-    "--episode", help="Number of iteration for each scenario", default=100
+    "--episode", help="Number of iteration for each scenario", default=100, type=int
 )
 args = parser.parse_args()
 clear_queue_step = False
@@ -33,7 +33,7 @@ if args.clear_queue:
     clear_queue_step = True
     logger.info("Clear queue before step is ON")
 if args.episode:
-    total_episodes = args.episode
+    total_episodes = int(args.episode)
     logger.info("Total iteration is %s", total_episodes)
 
 import keras
@@ -70,12 +70,6 @@ lower_bound = env.action_space.low[0]
 
 logger.info("Max Value of Action ->  %s", upper_bound)
 logger.info("Min Value of Action ->  %s", lower_bound)
-"""
-To implement better exploration by the Actor network, we use noisy perturbations,
-specifically
-an **Ornstein-Uhlenbeck process** for generating noise, as described in the paper.
-It samples noise from a correlated normal distribution.
-"""
 env.close()
 
 
@@ -294,11 +288,10 @@ along with updating the Target networks at a rate `tau`.
 
 # To store reward history of each episode
 ep_reward_list = []
-# To store average reward history of last few episodes
-avg_reward_list = []
 ep_latency_list = {}
 ep_revenue_list = []
-ep_throughput_list = []
+ep_throughput_list = {}
+ep_queue_load_list = {}
 
 directory_path = "./setting"
 specific_dir = Path(directory_path)
@@ -346,17 +339,31 @@ for folder in folders:
             logger.info("state: %s, action: %s", tf_prev_state, action)
             # Recieve state and reward from environment.
             state, reward, done, terminated, _ = env.step(action)
-
+            
             latency = env.get_last_step_latency()
             for clas, value in latency.items():
                 if clas not in ep_latency_list:
                     ep_latency_list[clas] = []
                 ep_latency_list[clas].append(value)
 
-            revenue = env.get_last_step_revenue()
+            
             throughput = env.get_last_step_throughput()
-            ep_throughput_list.append(throughput)
+            for tc, val in throughput.items():
+                if tc not in ep_throughput_list:
+                    ep_throughput_list[tc] = {}
+                for tech, tps in val.items():
+                    if tech not in ep_throughput_list[tc]:
+                        ep_throughput_list[tc][tech] = []
+                    ep_throughput_list[tc][tech].append(tps)
+            
+            revenue = env.get_last_step_revenue()
             ep_revenue_list.append(revenue)
+
+            queue_load = env.get_last_step_queue_load()
+            for tech, val in queue_load.items():
+                if tech not in ep_queue_load_list:
+                    ep_queue_load_list[tech] = []
+                ep_queue_load_list[tech].append(val)
 
             logger.info("Episode %s. Latency: %s. Revenue: %s$", ep, latency, revenue)
 
@@ -383,11 +390,10 @@ for folder in folders:
     os.makedirs(mypath, exist_ok=True)
     basepath = str(mypath)
 
-    # Episodes versus Avg. Rewards
-    avg_reward_list = np.mean(ep_reward_list[-40:])
+    # Episodes versus Avg. Rewards    
     plt.figure(figsize=(10, 6))
-    plt.plot(avg_reward_list)
-    plt.xlabel("Episode")
+    plt.plot(ep_reward_list)
+    plt.xlabel("Iteration")
     plt.ylabel("Avg. Episodic Reward")
     plt.savefig(basepath + "/avg_reward.png")
     # plt.show()
@@ -397,17 +403,26 @@ for folder in folders:
         plt.plot(val, label=tc)
 
     plt.legend()
-    plt.xlabel("Episode")
+    plt.xlabel("Iteration")
     plt.ylabel("Latency")
     plt.savefig(basepath + "/avg_latency.png")
 
     plt.figure(figsize=(10, 6))
     plt.plot(ep_revenue_list)
-    plt.xlabel("Episode")
+    plt.xlabel("Iteration")
     plt.ylabel("Revenue")
     plt.savefig(basepath + "/avg_revenue.png")
 
+    plt.figure(figsize=(10, 6))
+    for tech, val in ep_queue_load_list.items():
+        plt.plot(val, label=tech)
+    plt.legend()
+    plt.xlabel("Iteration")
+    plt.ylabel("Queue Load")
+    plt.savefig(basepath + "/queue_load.png")
+
     save_array_data_to_file(basepath + "/tps.yaml", json.dumps(ep_throughput_list))
+    save_array_data_to_file(basepath + "/queue.yaml", json.dumps(ep_queue_load_list))
     save_array_data_to_file(basepath + "/revenue.yaml", ep_revenue_list)
     for tc, val in ep_latency_list.items():
         save_array_data_to_file(basepath + "/latency" + tc + ".yaml", val)

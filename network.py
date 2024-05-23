@@ -237,7 +237,7 @@ class NetworkEnv(gym.Env):
                 continue
 
             longest = 0
-            for tc, value in self.accumulators.items():                
+            for tc, value in self.accumulators.items():
                 log_str = tc
                 for k, v in value.items():
                     if k == "latency":
@@ -393,6 +393,7 @@ class NetworkEnv(gym.Env):
         self.last_latency = {}
         self.last_revenue = 0
         self.last_throughtput = {}
+        self.last_queue_load = {}
         for tc, value in self.state_snapshot.items():
             # [latency, nr_throughput, wf_throughput, nr_queue, wf_queue]
             self.last_throughtput[tc] = {}
@@ -429,6 +430,7 @@ class NetworkEnv(gym.Env):
                 if mean_non_zero > self.queue_max_utilization:
                     queue_violated += 1
                 tf_val.append(mean_non_zero)
+                self.last_queue_load[tech] = mean_non_zero
             state_arr.append(np.array(tf_val))
 
         final_state = np.array(state_arr)
@@ -475,9 +477,9 @@ class NetworkEnv(gym.Env):
             + self.reward_factor["revenue"] * reward_revenue
         )
         if done:
-            final_reward = 10 * final_reward
+            final_reward = 100 * final_reward
         else:
-            final_reward = 10 * (self.sigmoid(final_reward) - 1)
+            final_reward = 100 * (self.sigmoid(final_reward) - 1)
 
         self.last_revenue = total_revenue
         logger.info(
@@ -502,6 +504,9 @@ class NetworkEnv(gym.Env):
 
     def get_last_step_throughput(self):
         return self.last_throughtput
+    
+    def get_last_step_queue_load(self):
+        return self.last_queue_load
 
     def reset(self):
         logger.info("Reset env")
